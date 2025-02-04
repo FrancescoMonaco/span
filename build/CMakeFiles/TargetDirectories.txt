@@ -1,0 +1,6 @@
+/home/monaco/span/build/CMakeFiles/GloveExample.dir
+/home/monaco/span/build/CMakeFiles/Test.dir
+/home/monaco/span/build/CMakeFiles/edit_cache.dir
+/home/monaco/span/build/CMakeFiles/rebuild_cache.dir
+/home/monaco/span/build/docs/CMakeFiles/edit_cache.dir
+/home/monaco/span/build/docs/CMakeFiles/rebuild_cache.dir

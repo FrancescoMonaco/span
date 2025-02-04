@@ -1,0 +1,20 @@
+[
+{
+  "directory": "/home/monaco/span/build",
+  "command": "/usr/bin/c++  -I/home/monaco/span/puffinn/include -I/home/monaco/span/puffinn/test/include  -std=c++14 -Wall -Wextra -Wno-noexcept-type -Wno-implicit-fallthrough -Wno-unused-function -march=native -O3 -g -fopenmp -g -o CMakeFiles/GloveExample.dir/examples/glove.cpp.o -c /home/monaco/span/puffinn/examples/glove.cpp",
+  "file": "/home/monaco/span/puffinn/examples/glove.cpp",
+  "output": "CMakeFiles/GloveExample.dir/examples/glove.cpp.o"
+},
+{
+  "directory": "/home/monaco/span/build",
+  "command": "/usr/bin/c++  -I/home/monaco/span/puffinn/include -I/home/monaco/span/puffinn/test/include  -std=c++14 -Wall -Wextra -Wno-noexcept-type -Wno-implicit-fallthrough -Wno-unused-function -march=native -O3 -g -fopenmp -g -o CMakeFiles/Test.dir/test/main.cpp.o -c /home/monaco/span/puffinn/test/main.cpp",
+  "file": "/home/monaco/span/puffinn/test/main.cpp",
+  "output": "CMakeFiles/Test.dir/test/main.cpp.o"
+},
+{
+  "directory": "/home/monaco/span/build",
+  "command": "/usr/bin/c++  -I/home/monaco/span/puffinn/include -I/home/monaco/span/puffinn/test/include  -std=c++14 -Wall -Wextra -Wno-noexcept-type -Wno-implicit-fallthrough -Wno-unused-function -march=native -O3 -g -fopenmp -g -o CMakeFiles/Test.dir/test/code.cpp.o -c /home/monaco/span/puffinn/test/code.cpp",
+  "file": "/home/monaco/span/puffinn/test/code.cpp",
+  "output": "CMakeFiles/Test.dir/test/code.cpp.o"
+}
+]

@@ -1,0 +1,3 @@
+/home/monaco/span/tree/CMakeFiles/test.dir
+/home/monaco/span/tree/CMakeFiles/edit_cache.dir
+/home/monaco/span/tree/CMakeFiles/rebuild_cache.dir
