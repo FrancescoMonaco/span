@@ -1,0 +1,3 @@
+[submodule "puffinn"]
+	path = puffinn
+	url = https://github.com/puffinn/puffinn

@@ -1,1 +1,0 @@
-/nix/store/591apldfgm1gr238rbfc8ib0y1z8ng2y-gcc-wrapper-14-20241116/bin/g++  -std=c++14 -Wall -Wextra  -march=native -O2 -g -fopenmp -Wl,--dependency-file=CMakeFiles/test.dir/link.d CMakeFiles/test.dir/source/test.cpp.o -o test  /nix/store/ksban2nxr2vz298lfv64vdjyz5i7admn-openmp-19.1.6/lib/libgomp.so /nix/store/h7zcxabfxa7v5xdna45y2hplj31ncf8a-glibc-2.40-36/lib/libpthread.so

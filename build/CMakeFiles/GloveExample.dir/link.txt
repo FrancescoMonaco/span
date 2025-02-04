@@ -1,1 +1,0 @@
-/usr/bin/c++  -std=c++14 -Wall -Wextra -Wno-noexcept-type -Wno-implicit-fallthrough -Wno-unused-function -march=native -O3 -g -fopenmp -g CMakeFiles/GloveExample.dir/examples/glove.cpp.o -o GloveExample  /usr/lib/gcc/x86_64-linux-gnu/9/libgomp.so /usr/lib/x86_64-linux-gnu/libpthread.so
