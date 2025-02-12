@@ -9,6 +9,7 @@
 #include "puffinn/maxpairbuffer.hpp"
 #include "puffinn/prefixmap.hpp"
 #include "puffinn/typedefs.hpp"
+#include "puffinn/math.hpp"
 
 #include "omp.h"
 #include <cassert>
@@ -32,6 +33,14 @@ namespace puffinn {
         /// It is only intended to be used to fairly assess the impact of sketching on the result. 
         Simple
     };
+
+    struct CollisionEnumerator {
+        std::vector<std::vector<std::pair<uint32_t, uint32_t>>> ranges;
+        size_t i, j;
+    };
+
+    using EdgeTuple = std::tuple<float, std::pair<unsigned int, unsigned int>>;
+
 
     class ChunkSerializable {
     public:
@@ -405,6 +414,85 @@ namespace puffinn {
             return MAX_HASHBITS;
         }
 
+        std::vector<CollisionEnumerator*> order_segments() {
+            std::vector<CollisionEnumerator*> res;
+            #pragma omp parallel for
+            for (size_t f = 0; f < lsh_maps.size(); f++) {
+                std::vector<uint32_t> segment;
+                CollisionEnumerator *ce_pointer = new CollisionEnumerator();
+                CollisionEnumerator& ce = *ce_pointer;
+                ce.i = MAX_HASHBITS;
+                ce.j = f;
+                //std::cout << "Table " << f << std::endl;
+                // The first and last segment are filled with filler elements. I guess
+                for (size_t j = 12; j < lsh_maps[f].hashes.size() -12; j++) {
+                    //std::cout << lsh_maps[f].hashes[j] << " ";
+                    if (lsh_maps[f].hashes[j] != lsh_maps[f].hashes[j-1]) {
+                        segment.push_back(j);
+                    }
+                }
+                //Print segments
+                //std::cout << std::endl;
+                for (size_t idx = 1; idx < segment.size(); idx++) {
+                    //std::cout << "Range" << segment[idx-1] << " " << segment[idx] << std::endl;
+                    std::vector<std::pair<uint32_t, uint32_t>> range = {std::make_pair(segment[idx-1], segment[idx])};
+                    ce.ranges.push_back(range);
+                }
+                res.push_back(ce_pointer);
+            }
+            return res;
+        }
+
+        void merge_segments(std::vector<CollisionEnumerator*>& segments) {
+            #pragma omp parallel for
+            for (auto& segment : segments) {
+                (*segment).i -= 1;
+                uint32_t mask = 0xffffffff;
+                mask = mask << (MAX_HASHBITS - (*segment).i);
+                //std::cout << "Original range length: " << segment.ranges.size() << std::endl;
+                std::vector<std::vector<std::pair<uint32_t, uint32_t>>> new_segments;
+                int offset = 0;
+                // Merge the ranges that share the same masked hash value. More than 2 ranges can share the same hash value.
+                for (size_t f = 0; f < (*segment).ranges.size(); f++) {
+                    //std::cout << "For cycle" << std::endl;
+                    auto range_curr = (*segment).ranges[f];
+                    //Skip the ranges that have already been merged.
+                    if (offset > 0) {
+                        offset--;
+                        continue;
+                    }
+                    auto index = range_curr[0].first;
+                    auto current = lsh_maps[(*segment).j].hashes[index] & mask;
+                    for (size_t g = f + 1; g < (*segment).ranges.size(); g++) {
+                        auto index_g = (*segment).ranges[g][0].first;
+                        auto next = lsh_maps[(*segment).j].hashes[index_g] & mask;
+                        if (current == next) {
+                            offset++;
+                        } else {
+                            break;
+                        }
+                    }
+                    // Create a tuple that contains all the pairs of ranges that share the same hash value.
+                    std::vector<std::pair<uint32_t, uint32_t>> new_range;
+                    // Insert the ones that we already merged, then add the new ones.
+
+                    new_range.insert(new_range.end(), range_curr.begin(), range_curr.end());
+                    for (size_t g = 0; g < offset; g++) {
+                        auto range_g = (*segment).ranges[f + g + 1];
+                        new_range.insert(new_range.end(), range_g.begin(), range_g.end());
+                    }
+                    //Print the new range
+                    //std::cout << "New range: " << new_range.size() << std::endl;
+                    new_segments.push_back(new_range);
+                }
+                if (new_segments.size() > 0) {
+                    //std::cout << "New segments size: " << new_segments.size() << std::endl;
+                (*segment).ranges = new_segments;
+                }
+            }
+            return; 
+        }
+
         float get_probability(uint16_t i, uint16_t j, float dist) const {
             auto table_idx = lsh_maps.size();
             auto last_tables = (j == MAX_HASHBITS ? table_idx : lsh_maps.size());
@@ -416,50 +504,65 @@ namespace puffinn {
                 );
         }
 
-        void order_segments(){
-
-        }
-
-        std::vector<std::pair<unsigned int, unsigned int>> all_close_pairs(
-            unsigned int i_now,
-            unsigned int j_now
+        std::vector<EdgeTuple> all_close_pairs(
+            const CollisionEnumerator& segment
         ) {
             // Return all pairs that share the same hash value in table j at length i.
-            std::vector<std::pair<unsigned int, unsigned int>> res;
+            std::vector<EdgeTuple> res;
             std::vector<uint32_t> segments;
-            segments.push_back(0);
+                int index = 0;
+                auto j = segment.j;
+                auto i = segment.i;
+                // If it's the full hash we just have to compute the pairs in each pair of the tuples
+                if (i == MAX_HASHBITS) {
+                    //std::cout << segment.ranges.size() << std::endl;    
+                    for ( const auto& range : segment.ranges) {
+                        for (uint32_t r = range[0].first; r < range[0].second; r++) {
+                            for (uint32_t s = r + 1; s < range[0].second; s++) {
+                                auto R = lsh_maps[j].indices[r];
+                                auto S = lsh_maps[j].indices[s];
+                                // TODO: change with the actual dimensionality
+                                float dist = TSim::compute_similarity(
+                                    dataset[R], 
+                                    dataset[S], 
+                                    dataset.get_description());
+                                //l2_distance_float_simple(dataset[R], dataset[S], 2);
+                                index++;
+                                res.emplace_back(dist, std::make_pair(R, S));
+                            }
+                        }
+                    }
 
-            uint32_t mask = 0xffffffff;
-            mask = mask << (MAX_HASHBITS - i_now);
-             
-            int index = 0;
-            // Take table lsh_maps[j] and find the segments that share the same hash value on length i.
-            //#pragma omp parallel for
-            segments.push_back(0);
-            for (size_t j = 2; j < lsh_maps[j_now].hashes.size(); j++) {
-                if (lsh_maps[j_now].hashes[j] & mask != lsh_maps[j_now].hashes[j-1] & mask) {
-                    segments.push_back(j);
                 }
-            }
-            segments.push_back(lsh_maps[j_now].hashes.size());
-            std::cout << "Segments: " << segments.size() << std::endl;
-            // check each pair of adjacent segments in lsh_maps[i] in ``depth``.
-            for (size_t j = 2; j < segments.size()-1; j++) {
-                auto left = (lsh_maps[j_now].hashes[segments[j - 1]]) & mask;
-                auto actual = (lsh_maps[j_now].hashes[segments[j]]) & mask;
-                std::cout << "Left: " << left << " Actual: " << actual << std::endl;
-                if (left == actual) {
-                    for (uint32_t r = segments[j-1]; r < segments[j]; r++) {
-                        for (uint32_t s = segments[j]; s < segments[j + 1]; s++) {
-                            auto R = lsh_maps[j_now].indices[r];
-                            auto S = lsh_maps[j_now].indices[s];
-                            index++;
-                            res.emplace_back(R, S);
+                // Else we have to compute the pairs just between the products of the ranges in the tuples, 
+                // no inner pairs, we already took care of that.
+                else {
+                    //std::cout << "Else" << std::endl;
+                    //std::cout << segment.ranges.size() << std::endl;
+                        // TODO: Implement the case where we have to compute the pairs between the products of the ranges in the tuples.
+                    for (const auto& range : segment.ranges){
+                        //std::cout << "Range size: " << range.size() <<std::endl;
+                        for(size_t f = 0; f < range.size(); f++){
+                            for (size_t g = f + 1; g < range.size(); g++){
+                                for(uint32_t index_f = range[f].first; index_f < range[f].second; index_f++){
+                                    for(uint32_t index_g = range[g].first; index_g < range[g].second; index_g++){
+                                        auto R = lsh_maps[j].indices[index_f];
+                                        auto S = lsh_maps[j].indices[index_g];
+                                        float dist = TSim::compute_similarity(
+                                            dataset[R], 
+                                            dataset[S], 
+                                            dataset.get_description());
+                                        //l2_distance_float_simple(dataset[R], dataset[S], 2);
+                                        index++;
+                                        res.emplace_back(dist, std::make_pair(R, S));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-            }
-            std::cout << "Index: " << index << std::endl;
+
+            //std::cout << "Index: " << index << std::endl;
             // res.emplace_back(1, 2);
             // res.emplace_back(2, 3);
             // res.emplace_back(3, 4);

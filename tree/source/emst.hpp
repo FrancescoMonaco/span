@@ -28,6 +28,7 @@ namespace puffinn{
         uint32_t MAX_HASHBITS;
         Index<CosineSimilarity> table;
         std::vector<std::vector<float>> data {};
+        std::vector<CollisionEnumerator*> segments;
         uint32_t num_data {0};
         // Sets for the confimed and the unconfirmed edges
         std::set<EdgeTuple> Tc;
@@ -35,7 +36,7 @@ namespace puffinn{
 
         std::set<EdgeTuple> top;
         const float delta {0.01};
-        const float epsilon {0.1};
+        const float epsilon {1.5};
 
 
         public:
@@ -71,6 +72,7 @@ namespace puffinn{
                 table.rebuild();
                 MAX_HASHBITS = table.get_hashbits();
                 MAX_REPETITIONS = table.get_repetitions();
+                segments = table.order_segments();
                 std::cout << "EMST constructed " << MAX_REPETITIONS <<  " L, K " << MAX_HASHBITS << " num data " << num_data << std::endl;
             };
 
@@ -78,23 +80,23 @@ namespace puffinn{
             ~EMST() = default;
 
             /// @brief Find the Minimum Spanning Tree using only confirmed edges
-            std::vector<std::pair<unsigned int, unsigned int>> find_tree(){
+            std::vector<std::pair<unsigned int, unsigned int>> find_tree() {
                 std::vector <std::pair<unsigned int, unsigned int>> tree;
                 return tree;
             }
 
 
             /// @brief Find the ɛ-EMST
-            std::vector<std::pair<unsigned int, unsigned int>> find_epsilon_tree(){
+            std::vector<std::pair<unsigned int, unsigned int>> find_epsilon_tree() {
     
                 std::vector<std::pair<unsigned int, unsigned int>> tree;
 
-                for (uint32_t i=MAX_HASHBITS; i>0; i--){
+                for (int i=MAX_HASHBITS; i>= 0; i--){
+                   // std::cout << "Iteration: " << segments[0].i <<" "<< i << std::endl;
                     //#pragma omp parallel for
                     for (size_t j=0; j<MAX_REPETITIONS; j++){
-                        Prefix st = {i, j, delta};
                         std::vector<EdgeTuple> local_Tu, local_Tc;
-                        enumerate_edges(st, local_Tu, local_Tc);
+                        enumerate_edges(*segments[j], local_Tu, local_Tc);
 
                         //#pragma omp critical
                         {
@@ -117,16 +119,21 @@ namespace puffinn{
                             }
                     
                             // Move all the confirmed edges in Tu to Tc
+                            std::vector<EdgeTuple> edges_to_move;
                             for(auto edge : Tu){
-                                std::cout << "probability " << table.get_probability(i, j, std::get<0>(edge)) << std::endl;
-                                if(table.get_probability(i, j, 1.0/(std::get<0>(edge)+1)) <= 1-delta){
+                               // std::cout << "probability " << table.get_probability(i, j, std::get<0>(edge)) << std::endl;
+                                if(table.get_probability(i, j, (std::get<0>(edge))) <= 1-delta){
                                     Tc.insert(edge);
-                                    Tu.erase(edge);
+                                    edges_to_move.push_back(edge);
                                 }
                             }
+                            for(auto edge : edges_to_move){
+                                Tu.erase(edge);
+                            }
+
                         }
                     
-                        std::cout << "top size: " << top.size() << std::endl;
+                        //std::cout << "top size: " << top.size() << std::endl;
                         //If we have num_data -1 edges compute the spanning tree weight
                         if(top.size()==num_data-1){
                             if (is_connected()){
@@ -148,6 +155,9 @@ namespace puffinn{
                             }
                         }
                     }
+                    //std::cout << "merging segments" << std::endl;
+                    table.merge_segments(segments);
+                    //std::cout << "merged segments" << std::endl;
                 }
                 return tree;
             };
@@ -156,27 +166,24 @@ namespace puffinn{
         private:
 
             
-            void enumerate_edges(Prefix st, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local){
+            void enumerate_edges(CollisionEnumerator st, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local){
                 // Discover edges that share the same prefix at iteration st.i, st.j
-                std::cout << "Enumerating edges for prefix: " << st.i << " " << st.j << std::endl;
-                std::vector<std::pair<unsigned int, unsigned int>> couples = table.all_close_pairs(st.i, st.j);
-                std::cout << "Couples size: " << couples.size() << std::endl;
+                //std::cout << "Enumerating edges for prefix: " << st.i << " " << st.j << std::endl;
+                std::vector<EdgeTuple> couples = table.all_close_pairs(st);
+                //std::cout << "Couples size: " << couples.size() << std::endl;
                 // Evaluate all pair distances
                 for (auto couple : couples){
-                    std::cout << "Couple: " << couple.first << " " << couple.second << " " << l2_distance_float_simple(&data[couple.first][0], &data[couple.second][0], dimensionality) << std::endl;
-
-                    float dist = sqrt(l2_distance_float_simple(&data[couple.first][0], &data[couple.second][0], dimensionality));
-                    std::cout << "Distance: " << dist << std::endl;
+                  //  std::cout << "Couple: " << (std::get<1>(couple)).first << " " << std::get<1>(couple).second << " " << std::get<float>(couple) << std::endl;
                     // If the distance is less than the threshold, add it to the confirmed edges
-                    if (table.get_probability(st.i, st.j+1, dist) <= 1 - st.delta){
-                        Tc_local.emplace_back(dist, couple);
+                    if (table.get_probability(st.i, st.j+1, std::get<float>(couple)) <= 1 - delta){
+                        Tc_local.emplace_back(couple);
 
-                        std::cout << "Adding to Tc" << std::endl;
+                        //std::cout << "Adding to Tc" << std::endl;
                     }
                     // Otherwise, add it to the unconfirmed edges
                     else{
-                        Tu_local.emplace_back(dist, couple);
-                        std::cout << "Adding to Tu" << std::endl;
+                        Tu_local.emplace_back(couple);
+                        //std::cout << "Adding to Tu" << std::endl;
                     }
                 }
 
@@ -239,7 +246,7 @@ namespace puffinn{
 
                 // Handle the case where the tree already has n-1 edges
                 if (top.size() == num_data - 1) {
-                    std::cout << "Tree already has n-1 edges" << std::endl;
+                    //std::cout << "Tree already has n-1 edges" << std::endl;
                     // Find the maximum weighted edge in the current tree
                     auto maxIt = top.rbegin();
                     float maxWeight = std::get<0>(*maxIt);
@@ -297,12 +304,10 @@ namespace puffinn{
                     graph[norm_e.first].push_back({norm_e.second, w});
                     graph[norm_e.second].push_back({norm_e.first, w});
                 }
-                std::cout << "Graph size: " << graph.size() << std::endl;
                 // If one of the endpoints isn't yet connected, adding the edge cannot form a cycle
                 if (graph.find(new_edge.first) == graph.end() ||
                     graph.find(new_edge.second) == graph.end()) {
                     top.insert(std::make_tuple(new_weight, new_edge));
-                    std::cout << "Adding edge " << new_edge.first << " " << new_edge.second << std::endl;
                     return true;
                 }
 
