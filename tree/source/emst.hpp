@@ -28,7 +28,7 @@ namespace puffinn{
         uint32_t MAX_HASHBITS;
         Index<CosineSimilarity> table;
         std::vector<std::vector<float>> data {};
-        std::vector<CollisionEnumerator*> segments;
+        std::vector<CollisionEnumerator> segments;
         uint32_t num_data {0};
         // Sets for the confimed and the unconfirmed edges
         std::set<EdgeTuple> Tc;
@@ -36,7 +36,7 @@ namespace puffinn{
 
         std::set<EdgeTuple> top;
         const float delta {0.01};
-        const float epsilon {1.5};
+        const float epsilon {0.5};
 
 
         public:
@@ -90,13 +90,20 @@ namespace puffinn{
             std::vector<std::pair<unsigned int, unsigned int>> find_epsilon_tree() {
     
                 std::vector<std::pair<unsigned int, unsigned int>> tree;
-
+                bool found = false;
                 for (int i=MAX_HASHBITS; i>= 0; i--){
+                    if (found){
+                        break;
+                    }
                    // std::cout << "Iteration: " << segments[0].i <<" "<< i << std::endl;
                     //#pragma omp parallel for
                     for (size_t j=0; j<MAX_REPETITIONS; j++){
+                        if (found){
+                            //#pragma omp cancel for
+                            continue;
+                        }
                         std::vector<EdgeTuple> local_Tu, local_Tc;
-                        enumerate_edges(*segments[j], local_Tu, local_Tc);
+                        enumerate_edges(segments[j], local_Tu, local_Tc);
 
                         //#pragma omp critical
                         {
@@ -136,8 +143,8 @@ namespace puffinn{
                         //std::cout << "top size: " << top.size() << std::endl;
                         //If we have num_data -1 edges compute the spanning tree weight
                         if(top.size()==num_data-1){
-                            if (is_connected()){
-                            std::cout << "Connected" << std::endl;}
+                            //if (is_connected()){
+                            //std::cout << "Connected" << std::endl;}
                             float tree_weight = 0;
                             for (const auto& edge : top){
                                 tree_weight += std::get<0>(edge);
@@ -151,7 +158,8 @@ namespace puffinn{
                                     tree.push_back(std::get<1>(edge));
                                 }
                                 //#pragma omp cancel for
-                                return tree;
+                                found = true;
+                                //return tree;
                             }
                         }
                     }

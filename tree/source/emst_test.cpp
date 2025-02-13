@@ -3,6 +3,7 @@
 #include "puffinn/collection.hpp"
 
 #include <iostream>
+#include <chrono>
 
 using namespace puffinn;
 
@@ -36,8 +37,8 @@ int main(){
     //     }
     // }
 
-    const unsigned int DIMENSIONS = 3;
-    const unsigned int SIZE = 100;
+    const unsigned int DIMENSIONS = 30;
+    const unsigned int SIZE = 1000;
 
     std::vector<std::vector<float>> data;
     for (unsigned int i=0; i < SIZE; i++) {
@@ -47,7 +48,13 @@ int main(){
     //Convert DIMENSIONS to a int32_t use a cast
     uint32_t DIM = static_cast<uint32_t>(DIMENSIONS);
 
-    EMST emst(DIM, 5*MB, data);
-    emst.find_epsilon_tree();
+    auto t1 = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i<3;i++ ){ 
+        EMST emst(DIM, 7*MB, data);
+        emst.find_epsilon_tree();    
+    }
+    auto t2 = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>( t2 - t1 ).count()/3;
+    std::cout << "Time: " << duration << " mseconds" << std::endl;
 
 }

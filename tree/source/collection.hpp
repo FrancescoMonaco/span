@@ -414,13 +414,12 @@ namespace puffinn {
             return MAX_HASHBITS;
         }
 
-        std::vector<CollisionEnumerator*> order_segments() {
-            std::vector<CollisionEnumerator*> res;
+        std::vector<CollisionEnumerator> order_segments() {
+            std::vector<CollisionEnumerator> res;
             #pragma omp parallel for
             for (size_t f = 0; f < lsh_maps.size(); f++) {
                 std::vector<uint32_t> segment;
-                CollisionEnumerator *ce_pointer = new CollisionEnumerator();
-                CollisionEnumerator& ce = *ce_pointer;
+                CollisionEnumerator ce;
                 ce.i = MAX_HASHBITS;
                 ce.j = f;
                 //std::cout << "Table " << f << std::endl;
@@ -438,34 +437,35 @@ namespace puffinn {
                     std::vector<std::pair<uint32_t, uint32_t>> range = {std::make_pair(segment[idx-1], segment[idx])};
                     ce.ranges.push_back(range);
                 }
-                res.push_back(ce_pointer);
+                #pragma omp critical
+                res.push_back(ce);
             }
             return res;
         }
 
-        void merge_segments(std::vector<CollisionEnumerator*>& segments) {
+        void merge_segments(std::vector<CollisionEnumerator>& segments) {
             #pragma omp parallel for
             for (auto& segment : segments) {
-                (*segment).i -= 1;
+                segment.i -= 1;
                 uint32_t mask = 0xffffffff;
-                mask = mask << (MAX_HASHBITS - (*segment).i);
+                mask = mask << (MAX_HASHBITS - segment.i);
                 //std::cout << "Original range length: " << segment.ranges.size() << std::endl;
                 std::vector<std::vector<std::pair<uint32_t, uint32_t>>> new_segments;
                 int offset = 0;
                 // Merge the ranges that share the same masked hash value. More than 2 ranges can share the same hash value.
-                for (size_t f = 0; f < (*segment).ranges.size(); f++) {
+                for (size_t f = 0; f < segment.ranges.size(); f++) {
                     //std::cout << "For cycle" << std::endl;
-                    auto range_curr = (*segment).ranges[f];
+                    auto range_curr = segment.ranges[f];
                     //Skip the ranges that have already been merged.
                     if (offset > 0) {
                         offset--;
                         continue;
                     }
                     auto index = range_curr[0].first;
-                    auto current = lsh_maps[(*segment).j].hashes[index] & mask;
-                    for (size_t g = f + 1; g < (*segment).ranges.size(); g++) {
-                        auto index_g = (*segment).ranges[g][0].first;
-                        auto next = lsh_maps[(*segment).j].hashes[index_g] & mask;
+                    auto current = lsh_maps[segment.j].hashes[index] & mask;
+                    for (size_t g = f + 1; g < segment.ranges.size(); g++) {
+                        auto index_g = segment.ranges[g][0].first;
+                        auto next = lsh_maps[segment.j].hashes[index_g] & mask;
                         if (current == next) {
                             offset++;
                         } else {
@@ -478,7 +478,7 @@ namespace puffinn {
 
                     new_range.insert(new_range.end(), range_curr.begin(), range_curr.end());
                     for (size_t g = 0; g < offset; g++) {
-                        auto range_g = (*segment).ranges[f + g + 1];
+                        auto range_g = segment.ranges[f + g + 1];
                         new_range.insert(new_range.end(), range_g.begin(), range_g.end());
                     }
                     //Print the new range
@@ -487,7 +487,7 @@ namespace puffinn {
                 }
                 if (new_segments.size() > 0) {
                     //std::cout << "New segments size: " << new_segments.size() << std::endl;
-                (*segment).ranges = new_segments;
+                segment.ranges = new_segments;
                 }
             }
             return; 
@@ -510,12 +510,13 @@ namespace puffinn {
             // Return all pairs that share the same hash value in table j at length i.
             std::vector<EdgeTuple> res;
             std::vector<uint32_t> segments;
-                int index = 0;
+                //int index = 0;
                 auto j = segment.j;
                 auto i = segment.i;
                 // If it's the full hash we just have to compute the pairs in each pair of the tuples
                 if (i == MAX_HASHBITS) {
-                    //std::cout << segment.ranges.size() << std::endl;    
+                    //std::cout << segment.ranges.size() << std::endl; 
+                    #pragma omp parallel for   
                     for ( const auto& range : segment.ranges) {
                         for (uint32_t r = range[0].first; r < range[0].second; r++) {
                             for (uint32_t s = r + 1; s < range[0].second; s++) {
@@ -527,8 +528,11 @@ namespace puffinn {
                                     dataset[S], 
                                     dataset.get_description());
                                 //l2_distance_float_simple(dataset[R], dataset[S], 2);
-                                index++;
+                                #pragma omp critical
+                                {
+                                //index++;
                                 res.emplace_back(dist, std::make_pair(R, S));
+                                }
                             }
                         }
                     }
@@ -540,7 +544,8 @@ namespace puffinn {
                     //std::cout << "Else" << std::endl;
                     //std::cout << segment.ranges.size() << std::endl;
                         // TODO: Implement the case where we have to compute the pairs between the products of the ranges in the tuples.
-                    for (const auto& range : segment.ranges){
+                        #pragma omp parallel for
+                        for (const auto& range : segment.ranges){
                         //std::cout << "Range size: " << range.size() <<std::endl;
                         for(size_t f = 0; f < range.size(); f++){
                             for (size_t g = f + 1; g < range.size(); g++){
@@ -553,8 +558,11 @@ namespace puffinn {
                                             dataset[S], 
                                             dataset.get_description());
                                         //l2_distance_float_simple(dataset[R], dataset[S], 2);
-                                        index++;
+                                        #pragma omp critical
+                                        {
+                                        //index++;
                                         res.emplace_back(dist, std::make_pair(R, S));
+                                        }
                                     }
                                 }
                             }
