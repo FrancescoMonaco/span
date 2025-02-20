@@ -22,6 +22,7 @@
         # system.
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
+            samply
             cmake
             gcc
             llvmPackages.openmp
