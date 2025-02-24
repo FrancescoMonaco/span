@@ -5,16 +5,15 @@
 #include "puffinn/format/real_vector.hpp"
 #include "puffinn/math.hpp"
 #include <iostream>
-#include <set>
-#include <stack>
 #include <vector>
+#include <algorithm>
 #include <unistd.h>
 using EdgeTuple = std::tuple<float, std::pair<unsigned int, unsigned int>>;
 
 namespace puffinn{
 
     struct Prefix{
-        uint_fast32_t i;
+        unsigned int i;
         uint_fast32_t j;
         float delta;
     };
@@ -61,19 +60,18 @@ namespace puffinn{
         uint64_t memory_limit;
         size_t MAX_REPETITIONS;
         uint32_t MAX_HASHBITS;
-        Index<CosineSimilarity> table;
+        Index<CosineSimilarity, FHTCrossPolytopeHash, SimHash> table;
         std::vector<std::vector<float>> data {};
         std::vector<CollisionEnumerator> segments;
         uint32_t num_data {0};
-        // Sets for the confimed and the unconfirmed edges
-        std::set<EdgeTuple> Tc;
-        std::set<EdgeTuple> Tu;
+        const float delta {0.0000001};
+        const float epsilon {0.01};
         DSU dsu;
+        // Sets for the confimed and the unconfirmed edges
+        std::vector<EdgeTuple> Tc;
+        std::vector<EdgeTuple> Tu;
 
-
-        std::set<EdgeTuple> top;
-        const float delta {0.01};
-        const float epsilon {0.2};
+        std::vector<EdgeTuple> top;
 
 
         public:
@@ -98,7 +96,7 @@ namespace puffinn{
             EMST(uint32_t dimensionality, uint64_t memory_limit, std::vector<std::vector<float>> &data_in, const float delta = 0.01, const float epsilon = 0.01)
                 : dimensionality(dimensionality),
                   memory_limit(memory_limit),
-                  table(Index<CosineSimilarity>(dimensionality, memory_limit)),
+                  table(Index<CosineSimilarity,FHTCrossPolytopeHash, SimHash>(dimensionality, memory_limit)),
                   data(data_in),
                   num_data((data_in).size()),
                   delta(delta),
@@ -112,16 +110,122 @@ namespace puffinn{
                 MAX_HASHBITS = table.get_hashbits();
                 MAX_REPETITIONS = table.get_repetitions();
                 segments = table.order_segments();
+                //dirty_start();
                 std::cout << "EMST constructed " << MAX_REPETITIONS <<  " L, K " << MAX_HASHBITS << " num data " << num_data << std::endl;
             };
 
             /// @brief Destructor
             ~EMST() = default;
-
+            
+            float exact_tree(){
+                // Clear top from any previous run
+                top.clear();
+                //Compute all the distances
+                std::vector<EdgeTuple> all_edges;
+                for (uint32_t i = 0; i < num_data; i++) {
+                    for (uint32_t j = i+1; j < num_data; j++) {
+                        float dist = table.get_similarity(i, j);
+                        all_edges.emplace_back(1-dist, std::make_pair(i, j));
+                    }
+                }
+                //Sort the edges
+                std::sort(all_edges.begin(), all_edges.end());
+                //Create the DSU
+                DSU dsu(num_data);
+                float tree_weight = 0;
+                for (const auto& edge : all_edges) {
+                    add_edge(edge, dsu);
+                }
+                for (const auto& edge : top) {
+                    tree_weight += std::get<0>(edge);
+                }
+                return tree_weight;
+            }
             /// @brief Find the Minimum Spanning Tree using only confirmed edges
             std::vector<std::pair<unsigned int, unsigned int>> find_tree() {
-                std::vector <std::pair<unsigned int, unsigned int>> tree;
+    
+                std::vector<std::pair<unsigned int, unsigned int>> tree;
+                bool found = false;
+                for (int i=MAX_HASHBITS; i>= 0; i--) {
+                    if (found) {
+                        break;
+                    }
+                   // std::cout << "Iteration: " << segments[0].i <<" "<< i << std::endl;
+                   // #pragma omp parallel for
+                    for (size_t j=0; j<MAX_REPETITIONS; j++) {
+                        if (found) {
+                            continue;
+                        }
+                        std::vector<EdgeTuple> local_Tu, local_Tc;
+                        enumerate_edges(segments[j], local_Tu, local_Tc);
+
+                       // #pragma omp critical
+                        {
+                            for(auto edge : local_Tc) {
+                                // add_edge_nocheck(edge);
+                                // Tu.insert(edge);
+                                if (std::find(top.begin(), top.end(), edge) != top.end())
+                                    continue;
+                                if(add_edge(edge, dsu)) {
+                                    Tc.push_back(edge);
+                                }
+                            }
+                            
+                            // In this case Tu is just a waiting room, they are not part of the confirmed tree
+                            for(auto edge : local_Tu) {
+                                Tu.push_back(edge);
+                            }
+
+                            // Move all the confirmed edges in Tu to Tc
+                            std::vector<EdgeTuple> edges_to_move;
+                            // Sort Tu by weight
+                            std::sort(Tu.begin(), Tu.end());
+                            int igh = 0;
+                            for(auto& edge : Tu) {
+                               // std::cout << "probability " << table.get_probability(i, j, std::get<0>(edge)) << std::endl;
+                               float prob = table.get_probability(i, j, (1-std::get<0>(edge)));
+                               std::cout << "Weight: " << std::get<0>(edge) << " Probability: " << prob << igh<< std::endl;
+                               igh++;
+                                if(prob <= 1-delta) {
+                                    if(add_edge(edge, dsu)) {
+                                        Tc.push_back(edge);
+                                        edges_to_move.push_back(edge);
+                                        std::cout << "moved" << std::endl;
+                                    }
+                                }
+                                else {// The edges are sorted by weight, so if one doesn't satisfy
+                                     // the probability then the rest can't
+                                    break;
+                                }
+                            }
+                            for(auto edge : edges_to_move) {
+                                Tu.erase(std::remove(Tu.begin(), Tu.end(), edge), Tu.end());
+                            }
+
+                        }
+                    
+                        //std::cout << "top size: " << top.size() << std::endl;
+                        //If we have num_data -1 edges compute the spanning tree weight
+                        if(top.size()==num_data-1) {
+                            //if (is_connected()) {
+                            // std::cout << "Connected" << std::endl;}
+                            float tree_weight = 0;
+                            for (const auto& edge : top) {
+                                tree_weight += std::get<0>(edge);
+                            }
+                            std::cout << "Tree weight: " << tree_weight << std::endl;
+                            found = true;
+                            return tree;
+                            }
+                        }
+                    
+                    //std::cout << "merging segments" << std::endl;
+                    table.merge_segments(segments);
+                }
+                    //std::cout << "merged segments" << std::endl;
+                
                 return tree;
+
             }
 
 
@@ -130,85 +234,66 @@ namespace puffinn{
     
                 std::vector<std::pair<unsigned int, unsigned int>> tree;
                 bool found = false;
-                for (int i=MAX_HASHBITS; i>= 0; i--){
-                    if (found){
+                for (int i=MAX_HASHBITS; i>= 0; i--) {
+                    if (found) {
                         break;
                     }
                    // std::cout << "Iteration: " << segments[0].i <<" "<< i << std::endl;
                    // #pragma omp parallel for
-                    for (size_t j=0; j<MAX_REPETITIONS; j++){
-                        if (found){
+                    for (size_t j=0; j<MAX_REPETITIONS; j++) {
+                        if (found) {
                             continue;
                         }
                         std::vector<EdgeTuple> local_Tu, local_Tc;
+                        // std::cout << "Enumerating edges for prefix: " << i << " " << j << std::endl;
                         enumerate_edges(segments[j], local_Tu, local_Tc);
 
                        // #pragma omp critical
                         {
-                            for(auto edge : local_Tu){
+                            for(auto edge : local_Tc) {
                                 // add_edge_nocheck(edge);
                                 // Tu.insert(edge);
-                                //If the edge is not already in the tree
-                                if( top.find(edge) != top.end() )
+                                if (std::find(top.begin(), top.end(), edge) != top.end())
                                     continue;
-                                //If it doesn't form a cycle
-                                if(add_edge(edge, dsu)){
-                                    Tu.insert(edge);
+                                if(add_edge(edge, dsu)) {
+                                    Tc.push_back(edge);
                                 }
                             }
 
-                            for(auto edge : local_Tc){
-                                // add_edge_nocheck(edge);
-                                // Tu.insert(edge);
-                                if (top.find(edge) != top.end())
-                                    continue;
-                                if(add_edge(edge, dsu)){
-                                    Tc.insert(edge);
+                            //Just add them to the waiting room
+                            for(auto edge : local_Tu) {
+                                    Tu.push_back(edge);
                                 }
-                            }
+
+
                             //
 
                             // Move all the confirmed edges in Tu to Tc
                             std::vector<EdgeTuple> edges_to_move;
-                            for(auto edge : Tu){
+                            // Sort Tu by weight
+                            std::sort(Tu.begin(), Tu.end());
+
+                            for(auto& edge : Tu) {
                                // std::cout << "probability " << table.get_probability(i, j, std::get<0>(edge)) << std::endl;
-                                if(table.get_probability(i, j, (std::get<0>(edge))) <= 1-delta){
-                                    Tc.insert(edge);
+                                if(table.get_probability(i, j, (1-std::get<0>(edge))) <= 1-delta) {                                  
+                                    Tc.push_back(edge);
                                     edges_to_move.push_back(edge);
                                 }
-                                else{
-                                    // The edges are sorted by weight, so if one doesn't satisfy
-                                    // the probability then the rest can't
+                                else {// The edges are sorted by weight, so if one doesn't satisfy
+                                     // the probability then the rest can't
                                     break;
                                 }
                             }
-                            for(auto edge : edges_to_move){
-                                Tu.erase(edge);
+                            for(auto edge : edges_to_move) {
+                                Tu.erase(std::remove(Tu.begin(), Tu.end(), edge), Tu.end());
                             }
 
                         }
-                    
-                        //std::cout << "top size: " << top.size() << std::endl;
-                        //If we have num_data -1 edges compute the spanning tree weight
-                        if(top.size()==num_data-1){
-                            if (is_connected()){
-                            std::cout << "Connected" << std::endl;}
-                            float tree_weight = 0;
-                            for (const auto& edge : top){
-                                tree_weight += std::get<0>(edge);
-                            }
-                            float bounded_weigth = bound_weight(Tu, Tc);
 
-                            std::cout << "Tree weight: " << tree_weight << " Bounded weight: " << bounded_weigth << std::endl;
-                            // If less than (1+ɛ)(sum over Tc + |Tu|*max(Tu) ) we return, else we continue
-                            if (tree_weight <= (1+epsilon)*bounded_weigth){
-                                for (const auto& edge : top){
-                                    tree.push_back(std::get<1>(edge));
-                                }
-                                //#pragma omp cancel for
-                                found = true;
-                                //return tree;
-                            }
+                        //Fill the tree
+                        std::tie(tree, found) = fill_tree(dsu);
+                        if (found) {
+                            return tree;
                         }
                     }
                     //std::cout << "merging segments" << std::endl;
@@ -222,16 +307,16 @@ namespace puffinn{
         private:
 
             
-            void enumerate_edges(CollisionEnumerator st, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local){
+            void enumerate_edges(CollisionEnumerator st, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local) {
                 // Discover edges that share the same prefix at iteration st.i, st.j
                 //std::cout << "Enumerating edges for prefix: " << st.i << " " << st.j << std::endl;
                 std::vector<EdgeTuple> couples = table.all_close_pairs(st);
                 //std::cout << "Couples size: " << couples.size() << std::endl;
                 // Evaluate all pair distances
-                for (auto couple : couples){
+                for (auto couple : couples) {
                   //  std::cout << "Couple: " << (std::get<1>(couple)).first << " " << std::get<1>(couple).second << " " << std::get<float>(couple) << std::endl;
                     // If the distance is less than the threshold, add it to the confirmed edges
-                    if (table.get_probability(st.i, st.j+1, std::get<float>(couple)) <= 1 - delta){
+                    if (table.get_probability(st.i, st.j, 1-std::get<0>(couple))  <= 1 - delta) {
                         Tc_local.emplace_back(couple);
 
                         //std::cout << "Adding to Tc" << std::endl;
@@ -242,37 +327,30 @@ namespace puffinn{
                         //std::cout << "Adding to Tu" << std::endl;
                     }
                 }
-
                 return;
             };
-
-            void prim_union_find(){
-                return;
-            }
 
             /// @brief Return the bound weight (1+ɛ)(sum over Tc + |Tu|*max(Tu) )
             /// @param Tu set of unconfirmed edges 
             /// @param Tc set of confirmed edges
             /// @return the weight
-            float bound_weight(std::set<EdgeTuple> Tu, std::set<EdgeTuple> Tc){
+            float bound_weight(std::vector<EdgeTuple> Tu, std::vector<EdgeTuple> Tc) {
                 float weight = 0;
-                if (Tc.size() == 0){
+                if (Tc.size() == 0) {
                     std::cout << "No confirmed edges" << std::endl;
                     return 0;
                 }
-                for (const auto edge : Tc){
-                    weight += l2_distance_float_simple(&data[std::get<1>(edge).first][0], &data[std::get<1>(edge).second][0], dimensionality);
-                    //std::get<0>(edge);
+                for (const auto& edge : Tc) {
+                    weight += std::get<0>(edge);
                 }
-                float max_confirmed = l2_distance_float_simple(&data[std::get<1>(*Tc.rbegin()).first][0], &data[std::get<1>(*Tc.rbegin()).second][0], dimensionality);
-                //std::get<0>(*Tc.rbegin());
+                float max_confirmed = std::get<0>(*std::max_element(Tc.begin(), Tc.end()));
                 weight += max_confirmed * Tu.size();
 
                 return weight;
             }
 
-            bool is_connected(){
-                if(top.size() == (table.get_size()-1)){
+            bool is_connected() {
+                if(top.size() == (table.get_size()-1)) {
                     std::unordered_map<unsigned int, std::vector<std::pair<unsigned int, float>>> graph;
                     for (const auto& edge_tuple : top) {
                         float w;
@@ -287,9 +365,9 @@ namespace puffinn{
                         graph[norm_e.second].push_back({norm_e.first, w});
                     }
 
-                    for (auto const& t: graph){
+                    for (auto const& t: graph) {
                         std::cout << t.first << " :";
-                        for (auto elem : t.second){
+                        for (auto elem : t.second) {
                             std::cout << elem.first << " ";
                         }
                         std::cout << " | ";
@@ -308,7 +386,7 @@ namespace puffinn{
             
                 // If the tree has reached max edges (n-1), check for the heaviest edge
                 if (top.size() == num_data - 1) {
-                    auto maxIt = top.rbegin();
+                    auto maxIt = std::max_element(top.begin(), top.end());
                     float maxWeight = std::get<0>(*maxIt);
                     std::pair<unsigned int, unsigned int> edgeToRemove = std::get<1>(*maxIt);
             
@@ -317,7 +395,7 @@ namespace puffinn{
                     }
             
                     // Temporarily remove the heaviest edge
-                    top.erase(*maxIt);
+                    top.erase(maxIt);
                     dsu = DSU(num_data); // Reset DSU
             
                     // Rebuild DSU without max edge
@@ -328,53 +406,84 @@ namespace puffinn{
             
                     // Try inserting new edge
                     if (dsu.union_sets(new_edge.first, new_edge.second)) {
-                        top.insert(std::make_tuple(new_weight, new_edge));
+                        top.emplace_back(new_weight, new_edge);
                         return true;
                     } else {
+                        // We have to find the max edge in this specific cycle
+                        // If the max edge is the cycle is the new then we keep the minimum spanning tree as it is
+                        // Else we remove the cycle max edge and insert the new edge
+
                         // Reinsert max edge if cycle was found
-                        top.insert(std::make_tuple(maxWeight, edgeToRemove));
+                        top.emplace_back(maxWeight, edgeToRemove);
+                        dsu.union_sets(edgeToRemove.first, edgeToRemove.second);
                         return false;
                     }
                 }
             
                 // Check if adding the new edge forms a cycle
                 if (dsu.union_sets(new_edge.first, new_edge.second)) {
-                    top.insert(std::make_tuple(new_weight, new_edge));
+                    top.emplace_back(new_weight, new_edge);
                     return true;
                 }
             
                 return false;
             }
 
-            bool has_cycle(
-                const std::unordered_map<unsigned int, std::vector<std::pair<unsigned int, float>>>& graph,
-                const std::pair<unsigned int, unsigned int>& new_edge,
-                std::vector<int>& parent,
-                std::vector<bool>& visited
-            ) {
-                std::stack<unsigned int> s;
-                s.push(new_edge.first);
-                visited[new_edge.first] = true;
-
-                while (!s.empty()) {
-                    unsigned int cur = s.top();
-                    s.pop();
-                    if (graph.find(cur) == graph.end()) {
-                        continue;
+            std::pair<std::vector<std::pair<unsigned int, unsigned int>>, bool> fill_tree(DSU dsu_copy) {
+                std::vector<std::pair<unsigned int, unsigned int>> tree;
+                std::vector<EdgeTuple> top_copy = top;
+                bool found = false;
+                
+                for (const auto& edge : Tu) {
+                    // Finish the tree with the best unconfirmed edges
+                    if (top.size() == num_data - 1) {
+                        break;
                     }
-                    for (const auto& neighbor : graph.at(cur)) {
-                        if (!visited[neighbor.first]) {
-                            visited[neighbor.first] = true;
-                            parent[neighbor.first] = cur;
-
-                            if (neighbor.first == new_edge.second) {
-                                return true; // Cycle detected
-                            }
-                            s.push(neighbor.first);
-                        }
+                    if (add_edge(edge, dsu_copy)) {
+                        top_copy.push_back(edge);
                     }
                 }
-                return false; // No cycle found
+
+
+                float tree_weight = 0;
+                for (const auto& edge : top_copy) {
+                    tree_weight += std::get<0>(edge);
+                }
+                float bounded_weigth = bound_weight(Tu, Tc);
+
+                std::cout << "Tree weight: " << tree_weight << " Bounded weight: " << bounded_weigth << std::endl;
+                // If less than (1+ɛ)(sum over Tc + |Tu|*max(Tu) ) we return, else we continue
+                if (tree_weight <= (1+epsilon)*bounded_weigth) {
+                    for (const auto& edge : top_copy) {
+                        tree.push_back(std::get<1>(edge));
+                    }
+                    //#pragma omp cancel for
+                    found = true;
+                    return {tree, found};
+                }
+                return {tree, found};
+                        
+ 
             }
+
+            /// @brief Generate a random spanning tree to have an initial solution
+            void dirty_start() {
+                std::vector<unsigned int> vertices(num_data);
+                std::iota(vertices.begin(), vertices.end(), 0);
+                std::random_shuffle(vertices.begin(), vertices.end());
+                for (size_t i = 1; i < vertices.size(); i++) {
+                    Tu.emplace_back(1-table.get_similarity(vertices[i-1], vertices[i]), std::make_pair(vertices[i-1], vertices[i]));
+                    //top.emplace_back(1-table.get_similarity(vertices[i-1], vertices[i]), std::make_pair(vertices[i-1], vertices[i]));
+                    //dsu.union_sets(vertices[i-1], vertices[i]);
+                }
+            }
+
+            /// @brief Clear the data structures from previous runs
+            void clear() {
+                Tc.clear();
+                Tu.clear();
+                top.clear();
+            }
+
     };  //closes class
 }       //closes namespace

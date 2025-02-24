@@ -443,6 +443,14 @@ namespace puffinn {
             return res;
         }
 
+        float get_similarity(uint32_t i, uint32_t j) {
+            float dist = TSim::compute_similarity(
+                dataset[i], 
+                dataset[j], 
+                dataset.get_description());
+            return dist;
+        }
+
         void merge_segments(std::vector<CollisionEnumerator>& segments) {
             #pragma omp parallel for
             for (auto& segment : segments) {
@@ -477,7 +485,7 @@ namespace puffinn {
                     // Insert the ones that we already merged, then add the new ones.
 
                     new_range.insert(new_range.end(), range_curr.begin(), range_curr.end());
-                    for (size_t g = 0; g < offset; g++) {
+                    for (int g = 0; g < offset; g++) {
                         auto range_g = segment.ranges[f + g + 1];
                         new_range.insert(new_range.end(), range_g.begin(), range_g.end());
                     }
@@ -493,12 +501,12 @@ namespace puffinn {
             return; 
         }
 
-        float get_probability(uint16_t i, uint16_t j, float dist) const {
+        float get_probability(unsigned int i, uint16_t j, float dist) const {
             auto table_idx = lsh_maps.size();
-            auto last_tables = (j == MAX_HASHBITS ? table_idx : lsh_maps.size());
+            auto last_tables = (i == MAX_HASHBITS ? table_idx : lsh_maps.size());
             return hash_source->failure_probability(
                     i,
-                    j,
+                    table_idx,
                     last_tables,
                     dist
                 );
@@ -507,17 +515,22 @@ namespace puffinn {
         std::vector<EdgeTuple> all_close_pairs(
             const CollisionEnumerator& segment
         ) {
+            // std::cout << "Segment size: " << segment.ranges.size() << std::endl;
             // Return all pairs that share the same hash value in table j at length i.
             std::vector<EdgeTuple> res;
+            std::vector<std::vector<EdgeTuple>> local_res(segment.ranges.size()); 
             std::vector<uint32_t> segments;
                 //int index = 0;
                 auto j = segment.j;
                 auto i = segment.i;
+                //std::cout << "Are we alive";
                 // If it's the full hash we just have to compute the pairs in each pair of the tuples
                 if (i == MAX_HASHBITS) {
-                    //std::cout << segment.ranges.size() << std::endl; 
+                    // std::cout << "If" << std::endl;
+                    // std::cout << segment.ranges.size() << std::endl; 
                     #pragma omp parallel for   
-                    for ( const auto& range : segment.ranges) {
+                    for ( uint32_t local_idx = 0; local_idx < segment.ranges.size(); local_idx++) {
+                        const auto& range = segment.ranges[local_idx];
                         for (uint32_t r = range[0].first; r < range[0].second; r++) {
                             for (uint32_t s = r + 1; s < range[0].second; s++) {
                                 auto R = lsh_maps[j].indices[r];
@@ -528,11 +541,9 @@ namespace puffinn {
                                     dataset[S], 
                                     dataset.get_description());
                                 //l2_distance_float_simple(dataset[R], dataset[S], 2);
-                                #pragma omp critical
-                                {
                                 //index++;
-                                res.emplace_back(dist, std::make_pair(R, S));
-                                }
+                               // std::cout << "" << dist << std::endl;
+                                local_res[local_idx].emplace_back(1-dist, std::make_pair(R, S));
                             }
                         }
                     }
@@ -544,9 +555,10 @@ namespace puffinn {
                     //std::cout << "Else" << std::endl;
                     //std::cout << segment.ranges.size() << std::endl;
                         // TODO: Implement the case where we have to compute the pairs between the products of the ranges in the tuples.
-                        #pragma omp parallel for
-                        for (const auto& range : segment.ranges){
-                        //std::cout << "Range size: " << range.size() <<std::endl;
+                    #pragma omp parallel for
+                    for (unsigned int local_idx = 0; local_idx < segment.ranges.size(); local_idx++) {  
+                    const auto& range = segment.ranges[local_idx];                      
+                            //std::cout << "Range size: " << range.size() <<std::endl;
                         for(size_t f = 0; f < range.size(); f++){
                             for (size_t g = f + 1; g < range.size(); g++){
                                 for(uint32_t index_f = range[f].first; index_f < range[f].second; index_f++){
@@ -557,12 +569,9 @@ namespace puffinn {
                                             dataset[R], 
                                             dataset[S], 
                                             dataset.get_description());
+                                           // std::cout << "Distance: " << dist << std::endl;
                                         //l2_distance_float_simple(dataset[R], dataset[S], 2);
-                                        #pragma omp critical
-                                        {
-                                        //index++;
-                                        res.emplace_back(dist, std::make_pair(R, S));
-                                        }
+                                        local_res[local_idx].emplace_back(1-dist, std::make_pair(R, S));
                                     }
                                 }
                             }
@@ -570,19 +579,9 @@ namespace puffinn {
                     }
                 }
 
-            //std::cout << "Index: " << index << std::endl;
-            // res.emplace_back(1, 2);
-            // res.emplace_back(2, 3);
-            // res.emplace_back(3, 4);
-            // res.emplace_back(4, 5);
-            // res.emplace_back(std::make_pair(4, 5));
-            // res.emplace_back(std::make_pair(5, 6));
-            // res.emplace_back(std::make_pair(6, 7));
-            // res.emplace_back(0,3);
-            // res.emplace_back(std::make_pair(1, 8));
-            // res.emplace_back(std::make_pair(2, 8));
-            // res.emplace_back(std::make_pair(3, 5));
-            // res.emplace_back(std::make_pair(7, 8));
+            for(const auto& local_res_vec : local_res){
+                res.insert(res.end(), local_res_vec.begin(), local_res_vec.end());
+            }
             return res;
 
         }
