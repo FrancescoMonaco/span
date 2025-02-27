@@ -39,7 +39,7 @@ int main(){
     //     }
     // }
 
-    const unsigned int DIMENSIONS = 8;
+    const unsigned int DIMENSIONS = 10;
     const unsigned int SIZE = 10000;
 
     std::vector<std::vector<float>> data;
@@ -85,20 +85,23 @@ int main(){
     // }
 
 
-    // int DIMENSIONS = data[0].size();
+    //  int DIMENSIONS = data[0].size();
     //Convert DIMENSIONS to a int32_t use a cast
     uint32_t DIM = static_cast<uint32_t>(DIMENSIONS);
     std::cout << "DIMENSIONS: " << DIMENSIONS << " Num points: "<< data.size() << std::endl;
 
      auto t1 = std::chrono::high_resolution_clock::now();
-     for (size_t i = 0; i<3;i++ ){ 
-         EMST emst(DIM, 8*MB, data);
+     //for (size_t i = 0; i<3;i++ ){ 
+         EMST emst(DIM, 80*MB, data);
          emst.find_epsilon_tree();   
-         float tree_weight = emst.exact_tree();
-         std::cout << "True tree weight: " << tree_weight << std::endl; 
-     }
+     //}
      auto t2 = std::chrono::high_resolution_clock::now();
-     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>( t2 - t1 ).count()/3;
+     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>( t2 - t1 ).count();///3;
+     // True weight
+     EMST emst_true(DIM, 8*MB, data);
+     float tree_weight = emst_true.exact_tree();
+     std::cout << "True tree weight: " << tree_weight << std::endl; 
+
      std::cout << "Time: " << duration << " mseconds" << std::endl;
 
 }

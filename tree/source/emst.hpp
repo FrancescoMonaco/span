@@ -4,10 +4,14 @@
 #include "puffinn/similarity_measure/cosine.hpp"
 #include "puffinn/format/real_vector.hpp"
 #include "puffinn/math.hpp"
+#include "puffinn/linkcutree.hpp"
 #include <iostream>
 #include <vector>
 #include <algorithm>
 #include <unistd.h>
+#include <unordered_set>
+#include <stack>
+
 using EdgeTuple = std::tuple<float, std::pair<unsigned int, unsigned int>>;
 
 namespace puffinn{
@@ -54,7 +58,7 @@ namespace puffinn{
     };
         
 
-    class EMST{
+    class EMST {
         // Object variables
         uint32_t dimensionality;
         uint64_t memory_limit;
@@ -65,11 +69,12 @@ namespace puffinn{
         std::vector<CollisionEnumerator> segments;
         uint32_t num_data {0};
         const float delta {0.0000001};
-        const float epsilon {0.01};
-        DSU dsu;
+        const float epsilon {0.00001};
+        DSU dsu_true;
         // Sets for the confimed and the unconfirmed edges
         std::vector<EdgeTuple> Tc;
         std::vector<EdgeTuple> Tu;
+        std::vector<std::unordered_set<unsigned int>> neighbors;
 
         std::vector<EdgeTuple> top;
 
@@ -101,7 +106,7 @@ namespace puffinn{
                   num_data((data_in).size()),
                   delta(delta),
                   epsilon(epsilon),
-                  dsu(DSU(num_data))
+                  dsu_true(DSU(num_data))
             {
                 for (auto vec : data) {
                     table.insert(vec);
@@ -110,6 +115,7 @@ namespace puffinn{
                 MAX_HASHBITS = table.get_hashbits();
                 MAX_REPETITIONS = table.get_repetitions();
                 segments = table.order_segments();
+                neighbors.resize(num_data);
                 //dirty_start();
                 std::cout << "EMST constructed " << MAX_REPETITIONS <<  " L, K " << MAX_HASHBITS << " num data " << num_data << std::endl;
             };
@@ -117,24 +123,34 @@ namespace puffinn{
             /// @brief Destructor
             ~EMST() = default;
             
+            /// @brief Computes the exact MST by doing all pairwise comparisons
+            /// @return weight of the exact MST
             float exact_tree(){
-                // Clear top from any previous run
-                top.clear();
+                // Clear from any previous runs
+                clear();
                 //Compute all the distances
                 std::vector<EdgeTuple> all_edges;
+                std::vector<std::vector<EdgeTuple>> local_edges (num_data);
+                #pragma omp parallel for
                 for (uint32_t i = 0; i < num_data; i++) {
                     for (uint32_t j = i+1; j < num_data; j++) {
                         float dist = table.get_similarity(i, j);
-                        all_edges.emplace_back(1-dist, std::make_pair(i, j));
+                        local_edges[i].emplace_back(1-dist, std::make_pair(i, j));
                     }
+                }
+                std::cout << "Computed all pairs" << std::endl;
+                // Merge the local edges
+                for (const auto& local : local_edges) {
+                    all_edges.insert(all_edges.end(), local.begin(), local.end());
                 }
                 //Sort the edges
                 std::sort(all_edges.begin(), all_edges.end());
                 //Create the DSU
                 DSU dsu(num_data);
                 float tree_weight = 0;
+                std::cout << "Creating the MST" << std::endl;
                 for (const auto& edge : all_edges) {
-                    add_edge(edge, dsu);
+                    add_edge(edge, dsu, top);
                 }
                 for (const auto& edge : top) {
                     tree_weight += std::get<0>(edge);
@@ -166,7 +182,7 @@ namespace puffinn{
                                 // Tu.insert(edge);
                                 if (std::find(top.begin(), top.end(), edge) != top.end())
                                     continue;
-                                if(add_edge(edge, dsu)) {
+                                if(add_edge(edge, dsu_true, top)) {
                                     Tc.push_back(edge);
                                 }
                             }
@@ -187,7 +203,7 @@ namespace puffinn{
                                std::cout << "Weight: " << std::get<0>(edge) << " Probability: " << prob << igh<< std::endl;
                                igh++;
                                 if(prob <= 1-delta) {
-                                    if(add_edge(edge, dsu)) {
+                                    if(add_edge(edge, dsu_true, top)) {
                                         Tc.push_back(edge);
                                         edges_to_move.push_back(edge);
                                         std::cout << "moved" << std::endl;
@@ -247,6 +263,7 @@ namespace puffinn{
                         std::vector<EdgeTuple> local_Tu, local_Tc;
                         // std::cout << "Enumerating edges for prefix: " << i << " " << j << std::endl;
                         enumerate_edges(segments[j], local_Tu, local_Tc);
+                        std::cout << "Tu_l size: " << local_Tu.size() << " Tu size: " << Tu.size() << " Tc size: " << local_Tc.size() << "Top size: " << top.size() << std::endl;
 
                        // #pragma omp critical
                         {
@@ -255,7 +272,7 @@ namespace puffinn{
                                 // Tu.insert(edge);
                                 if (std::find(top.begin(), top.end(), edge) != top.end())
                                     continue;
-                                if(add_edge(edge, dsu)) {
+                                if(add_edge(edge, dsu_true, top)) {
                                     Tc.push_back(edge);
                                 }
                             }
@@ -291,14 +308,13 @@ namespace puffinn{
                         }
 
                         //Fill the tree
-                        std::tie(tree, found) = fill_tree(dsu);
+                        std::tie(tree, found) = fill_tree(dsu_true);
                         if (found) {
+                            is_connected(tree);
                             return tree;
                         }
                     }
-                    //std::cout << "merging segments" << std::endl;
                     table.merge_segments(segments);
-                    //std::cout << "merged segments" << std::endl;
                 }
                 return tree;
             };
@@ -309,22 +325,20 @@ namespace puffinn{
             
             void enumerate_edges(CollisionEnumerator st, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local) {
                 // Discover edges that share the same prefix at iteration st.i, st.j
-                //std::cout << "Enumerating edges for prefix: " << st.i << " " << st.j << std::endl;
                 std::vector<EdgeTuple> couples = table.all_close_pairs(st);
-                //std::cout << "Couples size: " << couples.size() << std::endl;
                 // Evaluate all pair distances
                 for (auto couple : couples) {
-                  //  std::cout << "Couple: " << (std::get<1>(couple)).first << " " << std::get<1>(couple).second << " " << std::get<float>(couple) << std::endl;
+                    if(std::get<1>(couple).first < std::get<1>(couple).second) {
+                        std::swap(std::get<1>(couple).first, std::get<1>(couple).second);
+                    }
                     // If the distance is less than the threshold, add it to the confirmed edges
                     if (table.get_probability(st.i, st.j, 1-std::get<0>(couple))  <= 1 - delta) {
                         Tc_local.emplace_back(couple);
 
-                        //std::cout << "Adding to Tc" << std::endl;
                     }
                     // Otherwise, add it to the unconfirmed edges
                     else{
                         Tu_local.emplace_back(couple);
-                        //std::cout << "Adding to Tu" << std::endl;
                     }
                 }
                 return;
@@ -344,126 +358,152 @@ namespace puffinn{
                     weight += std::get<0>(edge);
                 }
                 float max_confirmed = std::get<0>(*std::max_element(Tc.begin(), Tc.end()));
-                weight += max_confirmed * Tu.size();
+                std::cout << "Max confirmed: " << max_confirmed << std::endl;
+                std::cout << "Current weight: " << weight << std::endl;
+                weight += max_confirmed * (data.size()-1-Tc.size());
 
                 return weight;
             }
 
-            bool is_connected() {
-                if(top.size() == (table.get_size()-1)) {
-                    std::unordered_map<unsigned int, std::vector<std::pair<unsigned int, float>>> graph;
-                    for (const auto& edge_tuple : top) {
-                        float w;
-                        std::pair<unsigned int, unsigned int> e;
-                        std::tie(w, e) = edge_tuple;
-                        // Normalize stored edge.
-                        std::pair<unsigned int, unsigned int> norm_e = {
-                            std::min(e.first, e.second),
-                            std::max(e.first, e.second)
-                        };
-                        graph[norm_e.first].push_back({norm_e.second, w});
-                        graph[norm_e.second].push_back({norm_e.first, w});
-                    }
-
-                    for (auto const& t: graph) {
-                        std::cout << t.first << " :";
-                        for (auto elem : t.second) {
-                            std::cout << elem.first << " ";
-                        }
-                        std::cout << " | ";
-                    }
-
-                
-                return top.size() == (table.get_size()-1);
+            bool is_connected(std::vector<std::pair<unsigned int, unsigned int>> tree) {
+                // Check if the tree is connected
+                std::vector<std::pair<unsigned int, unsigned int>> edges = tree;
+                std::vector<bool> visited(num_data, false);
+                std::vector<std::vector<unsigned int>> adj_list(num_data);
+                for (const auto& edge : edges) {
+                    adj_list[edge.first].push_back(edge.second);
+                    adj_list[edge.second].push_back(edge.first);
                 }
-                return false;
-            };
-            
-            bool add_edge(const EdgeTuple& new_edge_input, DSU &dsu) {
-                // Extract new edge
-                std::pair<unsigned int, unsigned int> new_edge = std::get<1>(new_edge_input);
-                float new_weight = std::get<0>(new_edge_input);
-            
-                // If the tree has reached max edges (n-1), check for the heaviest edge
-                if (top.size() == num_data - 1) {
-                    auto maxIt = std::max_element(top.begin(), top.end());
-                    float maxWeight = std::get<0>(*maxIt);
-                    std::pair<unsigned int, unsigned int> edgeToRemove = std::get<1>(*maxIt);
-            
-                    if (new_weight >= maxWeight) {
-                        return false; // New edge is not better
+                std::vector<unsigned int> stack;
+                stack.push_back(0);
+                visited[0] = true;
+                while (!stack.empty()) {
+                    unsigned int node = stack.back();
+                    stack.pop_back();
+                    for (const auto& neighbor : adj_list[node]) {
+                        if (!visited[neighbor]) {
+                            visited[neighbor] = true;
+                            stack.push_back(neighbor);
+                        }
                     }
-            
-                    // Temporarily remove the heaviest edge
-                    top.erase(maxIt);
-                    dsu = DSU(num_data); // Reset DSU
-            
-                    // Rebuild DSU without max edge
-                    for (const auto& edge_tuple : top) {
-                        std::pair<unsigned int, unsigned int> e = std::get<1>(edge_tuple);
-                        dsu.union_sets(e.first, e.second);
-                    }
-            
-                    // Try inserting new edge
-                    if (dsu.union_sets(new_edge.first, new_edge.second)) {
-                        top.emplace_back(new_weight, new_edge);
-                        return true;
-                    } else {
-                        // We have to find the max edge in this specific cycle
-                        // If the max edge is the cycle is the new then we keep the minimum spanning tree as it is
-                        // Else we remove the cycle max edge and insert the new edge
+                }
+                // for (const auto& edge : tree) {
+                //     std::cout << edge.first << " " << edge.second << std::endl;
+                // }
 
-                        // Reinsert max edge if cycle was found
-                        top.emplace_back(maxWeight, edgeToRemove);
-                        dsu.union_sets(edgeToRemove.first, edgeToRemove.second);
+                for (const auto& v : visited) {
+                    if (!v) {
+                        std::cout << "Not connected" << std::endl;
                         return false;
                     }
                 }
+                std::cout << "Connected" << std::endl;
+
+                return true;
+            };
             
-                // Check if adding the new edge forms a cycle
+            bool add_edge(const EdgeTuple& new_edge_input, DSU &dsu, std::vector<EdgeTuple>& edge_list) {
+                //std::sort(top.begin(), top.end());
+                // Extract new edge and its weight.
+                std::pair<unsigned int, unsigned int> new_edge = std::get<1>(new_edge_input);
+                float new_weight = std::get<0>(new_edge_input);
+            
+                // Try to add new edge normally.
                 if (dsu.union_sets(new_edge.first, new_edge.second)) {
-                    top.emplace_back(new_weight, new_edge);
+                    edge_list.push_back(new_edge_input);
+                    neighbors[new_edge.first].insert(new_edge.second);
+                    neighbors[new_edge.second].insert(new_edge.first);
                     return true;
                 }
-            
-                return false;
+                
+                // Otherwise, adding new_edge forms a cycle.
+                // Use DFS to get the unique path between new_edge.first and new_edge.second
+                std::vector<EdgeTuple> cycleEdges;
+                dfs_cycle_discover(new_edge.first, new_edge.second, cycleEdges);
+                if (cycleEdges.empty()) {
+                    // Should not happen in a spanning tree.
+                    return false;
+                }
+                
+                // Find the heaviest edge along the cycle.
+                std::sort(cycleEdges.begin(), cycleEdges.end());
+                EdgeTuple maxCycleTuple = *cycleEdges.rbegin();
+                float maxCycleWeight = std::get<0>(maxCycleTuple);
+                
+                // If the new edge is not strictly better than the heaviest edge on the cycle, do nothing.
+                if (new_weight >= maxCycleWeight) {
+                    return false;
+                }
+                
+                // Remove the heaviest edge from the spanning tree.
+                std::pair<unsigned int, unsigned int> maxCycleEdge = std::get<1>(maxCycleTuple);
+                auto it = std::find(edge_list.begin(), edge_list.end(), maxCycleTuple);
+                if (it != edge_list.end()) {
+                    edge_list.erase(it);
+                } else {
+                    return false;
+                }
+                
+                // Remove the heavy edge from the neighbors.
+                auto remove_neighbor = [&](unsigned int u, unsigned int v) {
+                    neighbors[u].erase(v);
+                };
+                remove_neighbor(maxCycleEdge.first, maxCycleEdge.second);
+                remove_neighbor(maxCycleEdge.second, maxCycleEdge.first);
+                
+                // Insert the new edge.
+                edge_list.push_back(new_edge_input);
+                neighbors[new_edge.first].insert(new_edge.second);
+                neighbors[new_edge.second].insert(new_edge.first);
+                
+                // Rebuild the DSU from the updated tree.
+                dsu = DSU(num_data);
+                for (const auto &edge : edge_list) {
+                    std::pair<unsigned int, unsigned int> e = std::get<1>(edge);
+                    dsu.union_sets(e.first, e.second);
+                }
+                
+                return true;
             }
-
+            
             std::pair<std::vector<std::pair<unsigned int, unsigned int>>, bool> fill_tree(DSU dsu_copy) {
                 std::vector<std::pair<unsigned int, unsigned int>> tree;
-                std::vector<EdgeTuple> top_copy = top;
+                std::vector<EdgeTuple> top_copy (top);               
+
                 bool found = false;
-                
-                for (const auto& edge : Tu) {
-                    // Finish the tree with the best unconfirmed edges
-                    if (top.size() == num_data - 1) {
-                        break;
-                    }
-                    if (add_edge(edge, dsu_copy)) {
-                        top_copy.push_back(edge);
-                    }
+                if (Tc.size() == 0) {
+                    return {tree, found};
                 }
 
+                for (const auto& edge : Tu) {
+                    // Finish the tree with the best unconfirmed edges
+                    if (top_copy.size() == num_data - 1) {
+                        break;
+                    }
+                    add_edge(edge, dsu_copy, top_copy);
+                }
+
+                if (top_copy.size() != num_data - 1) {
+                    return {tree, found};
+                }
 
                 float tree_weight = 0;
                 for (const auto& edge : top_copy) {
                     tree_weight += std::get<0>(edge);
                 }
                 float bounded_weigth = bound_weight(Tu, Tc);
-
                 std::cout << "Tree weight: " << tree_weight << " Bounded weight: " << bounded_weigth << std::endl;
                 // If less than (1+ɛ)(sum over Tc + |Tu|*max(Tu) ) we return, else we continue
                 if (tree_weight <= (1+epsilon)*bounded_weigth) {
                     for (const auto& edge : top_copy) {
                         tree.push_back(std::get<1>(edge));
                     }
-                    //#pragma omp cancel for
+
                     found = true;
+                    top = top_copy;
                     return {tree, found};
                 }
                 return {tree, found};
-                        
- 
             }
 
             /// @brief Generate a random spanning tree to have an initial solution
@@ -485,5 +525,57 @@ namespace puffinn{
                 top.clear();
             }
 
+            /// @brief Find the path that connects source to find
+            /// @param source, the source node
+            /// @param find, the node to find
+            /// @param cycleEdges, the edges of the path
+            void dfs_cycle_discover(unsigned int source, unsigned int find, std::vector<EdgeTuple> &cycleEdges) {
+                //return;
+                std::stack<unsigned int> s;
+                std::vector<char> visited(num_data, 0);
+                std::vector<unsigned int> parent(num_data, -1);  // Track parent nodes for path reconstruction
+                bool found = false;
+            
+                s.push(source);
+                visited[source] = 1;
+            
+                while (!s.empty()) {
+                    unsigned int current = s.top();
+                    s.pop();
+            
+                    // If we found the target, break out
+                    if (current == find) {
+                        found = true;
+                        break;
+                    }
+            
+                    for (auto& neighbor : neighbors[current]) {
+                        if (!visited[neighbor]) {
+                            visited[neighbor] = 1;
+                            parent[neighbor] = current; // Track the path
+                            s.push(neighbor);
+                        }
+                    }
+                }
+            
+                // If the path is found, reconstruct it
+                if (found) {
+                    std::vector<unsigned int> path;
+                    for (unsigned int node = find; node != -1; node = parent[node]) {
+                        path.push_back(node);
+                    }
+                    std::reverse(path.begin(), path.end()); // Reverse to get source -> target order
+            
+                    // Store the path in cycleEdges
+                    for (size_t i = 0; i < path.size() - 1; i++) {
+                        cycleEdges.emplace_back(
+                            table.get_similarity(path[i], path[i + 1]),
+                            std::make_pair(path[i], path[i + 1])
+                        );
+                       // std::cout << path[i] << " -> " << path[i + 1] << " ";
+                    }
+                } 
+            }
+            
     };  //closes class
 }       //closes namespace
