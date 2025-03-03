@@ -9,7 +9,6 @@
 #include <vector>
 #include <algorithm>
 #include <unistd.h>
-#include <unordered_set>
 #include <stack>
 
 using EdgeTuple = std::tuple<float, std::pair<unsigned int, unsigned int>>;
@@ -74,7 +73,7 @@ namespace puffinn{
         // Sets for the confimed and the unconfirmed edges
         std::vector<EdgeTuple> Tc;
         std::vector<EdgeTuple> Tu;
-        std::vector<std::unordered_set<unsigned int>> neighbors;
+        std::vector<std::vector<unsigned int>> neighbors;
 
         std::vector<EdgeTuple> top;
 
@@ -116,7 +115,7 @@ namespace puffinn{
                 MAX_REPETITIONS = table.get_repetitions();
                 segments = table.order_segments();
                 neighbors.resize(num_data);
-                //dirty_start();
+                dirty_start();
                 std::cout << "EMST constructed " << MAX_REPETITIONS <<  " L, K " << MAX_HASHBITS << " num data " << num_data << std::endl;
             };
 
@@ -196,8 +195,9 @@ namespace puffinn{
                             std::vector<EdgeTuple> edges_to_move;
                             // Sort Tu by weight
                             std::sort(Tu.begin(), Tu.end());
+                            std::cout << "Tu sorted"  << std::endl;
                             int igh = 0;
-                            for(auto& edge : Tu) {
+                            for(const auto& edge : Tu) {
                                // std::cout << "probability " << table.get_probability(i, j, std::get<0>(edge)) << std::endl;
                                float prob = table.get_probability(i, j, (1-std::get<0>(edge)));
                                std::cout << "Weight: " << std::get<0>(edge) << " Probability: " << prob << igh<< std::endl;
@@ -211,6 +211,7 @@ namespace puffinn{
                                 }
                                 else {// The edges are sorted by weight, so if one doesn't satisfy
                                      // the probability then the rest can't
+                                     std::cout << "Skip";
                                     break;
                                 }
                             }
@@ -268,9 +269,9 @@ namespace puffinn{
                        // #pragma omp critical
                         {
                             for(auto edge : local_Tc) {
-                                // add_edge_nocheck(edge);
-                                // Tu.insert(edge);
-                                if (std::find(top.begin(), top.end(), edge) != top.end())
+                                auto first_edge = std::get<1>(edge).first;
+                                auto second_edge = std::get<1>(edge).second;
+                                if (std::find(neighbors [first_edge].begin(), neighbors[first_edge].end(), second_edge) != neighbors[first_edge].end())
                                     continue;
                                 if(add_edge(edge, dsu_true, top)) {
                                     Tc.push_back(edge);
@@ -281,9 +282,6 @@ namespace puffinn{
                             for(auto edge : local_Tu) {
                                     Tu.push_back(edge);
                                 }
-
-
-                            //
 
                             // Move all the confirmed edges in Tu to Tc
                             std::vector<EdgeTuple> edges_to_move;
@@ -306,13 +304,19 @@ namespace puffinn{
                             }
 
                         }
-
-                        //Fill the tree
-                        std::tie(tree, found) = fill_tree(dsu_true);
-                        if (found) {
-                            is_connected(tree);
-                            return tree;
+                        if (top.size() == num_data - 1) {
+                            std::tie(tree, found) = fill_tree(dsu_true);
+                            if (found) {
+                                is_connected(tree);
+                                return tree;
+                            }
                         }
+                    }
+                    //Fill the tree
+                    std::tie(tree, found) = fill_tree(dsu_true);
+                    if (found) {
+                        is_connected(tree);
+                        return tree;
                     }
                     table.merge_segments(segments);
                 }
@@ -334,7 +338,6 @@ namespace puffinn{
                     // If the distance is less than the threshold, add it to the confirmed edges
                     if (table.get_probability(st.i, st.j, 1-std::get<0>(couple))  <= 1 - delta) {
                         Tc_local.emplace_back(couple);
-
                     }
                     // Otherwise, add it to the unconfirmed edges
                     else{
@@ -411,8 +414,8 @@ namespace puffinn{
                 // Try to add new edge normally.
                 if (dsu.union_sets(new_edge.first, new_edge.second)) {
                     edge_list.push_back(new_edge_input);
-                    neighbors[new_edge.first].insert(new_edge.second);
-                    neighbors[new_edge.second].insert(new_edge.first);
+                    neighbors[new_edge.first].push_back(new_edge.second);
+                    neighbors[new_edge.second].push_back(new_edge.first);
                     return true;
                 }
                 
@@ -446,15 +449,15 @@ namespace puffinn{
                 
                 // Remove the heavy edge from the neighbors.
                 auto remove_neighbor = [&](unsigned int u, unsigned int v) {
-                    neighbors[u].erase(v);
+                    neighbors[u].erase(std::remove(neighbors[u].begin(), neighbors[u].end(), v), neighbors[u].end());
                 };
                 remove_neighbor(maxCycleEdge.first, maxCycleEdge.second);
                 remove_neighbor(maxCycleEdge.second, maxCycleEdge.first);
                 
                 // Insert the new edge.
                 edge_list.push_back(new_edge_input);
-                neighbors[new_edge.first].insert(new_edge.second);
-                neighbors[new_edge.second].insert(new_edge.first);
+                neighbors[new_edge.first].push_back(new_edge.second);
+                neighbors[new_edge.second].push_back(new_edge.first);
                 
                 // Rebuild the DSU from the updated tree.
                 dsu = DSU(num_data);
@@ -530,18 +533,18 @@ namespace puffinn{
             /// @param find, the node to find
             /// @param cycleEdges, the edges of the path
             void dfs_cycle_discover(unsigned int source, unsigned int find, std::vector<EdgeTuple> &cycleEdges) {
-                //return;
-                std::stack<unsigned int> s;
+                return;
+                std::vector<unsigned int> s;
                 std::vector<char> visited(num_data, 0);
-                std::vector<unsigned int> parent(num_data, -1);  // Track parent nodes for path reconstruction
+                std::vector<int> parent(num_data, -1);  // Track parent nodes for path reconstruction
                 bool found = false;
             
-                s.push(source);
+                s.push_back(source);
                 visited[source] = 1;
             
                 while (!s.empty()) {
-                    unsigned int current = s.top();
-                    s.pop();
+                    unsigned int current = s.back();
+                    s.pop_back();
             
                     // If we found the target, break out
                     if (current == find) {
@@ -553,7 +556,7 @@ namespace puffinn{
                         if (!visited[neighbor]) {
                             visited[neighbor] = 1;
                             parent[neighbor] = current; // Track the path
-                            s.push(neighbor);
+                            s.push_back(neighbor);
                         }
                     }
                 }
@@ -561,7 +564,7 @@ namespace puffinn{
                 // If the path is found, reconstruct it
                 if (found) {
                     std::vector<unsigned int> path;
-                    for (unsigned int node = find; node != -1; node = parent[node]) {
+                    for (int node = find; node != -1; node = parent[node]) {
                         path.push_back(node);
                     }
                     std::reverse(path.begin(), path.end()); // Reverse to get source -> target order

@@ -257,11 +257,11 @@ namespace puffinn {
         /// OMP_NUM_THREADS environment variable.
         void rebuild() {
             // Compute sketches for the new vectors.
-            filterer.add_sketches(dataset, last_rebuild);
+            //filterer.add_sketches(dataset, last_rebuild);
 
             auto desc = dataset.get_description();
             auto table_bytes = PrefixMap<THash>::memory_usage(dataset.get_size(), hash_args->function_memory_usage(desc, MAX_HASHBITS));
-            auto filterer_bytes = filterer.memory_usage(desc);
+            auto filterer_bytes = 0;//filterer.memory_usage(desc);
 
             uint64_t required_mem = dataset.memory_usage()+filterer_bytes; 
             unsigned int num_tables = 0;
@@ -540,9 +540,6 @@ namespace puffinn {
                                     dataset[R], 
                                     dataset[S], 
                                     dataset.get_description());
-                                //l2_distance_float_simple(dataset[R], dataset[S], 2);
-                                //index++;
-                               // std::cout << "" << dist << std::endl;
                                 local_res[local_idx].emplace_back(1-dist, std::make_pair(R, S));
                             }
                         }
@@ -557,7 +554,7 @@ namespace puffinn {
                         // TODO: Implement the case where we have to compute the pairs between the products of the ranges in the tuples.
                     #pragma omp parallel for
                     for (unsigned int local_idx = 0; local_idx < segment.ranges.size(); local_idx++) {  
-                    const auto& range = segment.ranges[local_idx];                      
+                        const auto& range = segment.ranges[local_idx];                      
                             //std::cout << "Range size: " << range.size() <<std::endl;
                         for(size_t f = 0; f < range.size(); f++){
                             for (size_t g = f + 1; g < range.size(); g++){
