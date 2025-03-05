@@ -77,8 +77,8 @@ namespace puffinn{
         std::vector<std::vector<float>> data {};
         std::vector<CollisionEnumerator> segments;
         uint32_t num_data {0};
-        const float delta {0.0000001};
-        const float epsilon {0.00001};
+        const float delta {0.01};
+        const float epsilon {0.01};
         DSU dsu_true;
         // Sets for the confimed and the unconfirmed edges
         std::vector<EdgeTuple> Tc;
@@ -167,6 +167,9 @@ namespace puffinn{
             /// @brief Find the Minimum Spanning Tree using only confirmed edges
             std::vector<std::pair<unsigned int, unsigned int>> find_tree() {    
                 std::vector<std::pair<unsigned int, unsigned int>> tree;
+                std::vector<std::vector<EdgeTuple>> local_edges (num_data);
+                std::vector<std::vector<EdgeTuple>> local_Tus (num_data);
+
                 bool found = false;
                 float max_confirmed = 0;
                 std::vector<EdgeTuple> edges;
@@ -180,8 +183,8 @@ namespace puffinn{
                             continue;
                         }
                         DSU local_dsu(num_data);
-                        std::vector<EdgeTuple> local_Tu, local_Tc, local_top;
-                        enumerate_edges(segments[j], local_Tu, local_Tc);    
+                        std::vector<EdgeTuple>local_Tc, local_top;
+                        enumerate_edges(segments[j], local_Tus[j], local_Tc);    
 
 
                         std::sort(local_Tc.begin(), local_Tc.end());
@@ -191,28 +194,20 @@ namespace puffinn{
                             }
                             add_edge(edge, local_dsu, local_top);
                         }
-
-                        #pragma omp critical
-                        {
-                        Tu.insert(Tu.end(), local_Tu.begin(), local_Tu.end());
-                        edges.insert(edges.end(), local_top.begin(), local_top.end());
-                        }
+                        local_edges[j].insert(local_edges[j].end(), local_top.begin(), local_top.end());
+                        
 
 
                         #pragma omp critical
                         {
                         // Every x iterations we have a batch, construct the MST from these edges
-                        if (j%40 == 0) {                       
+                        if (((int)MAX_REPETITIONS/2)%(j+1) == 0) {   
                             //Move the top edges in with the new edges
                             edges.insert(edges.end(), top.begin(), top.end());
                             top.clear();
                             dsu_true = DSU(num_data);
-                            std::sort(Tu.begin(), Tu.end());
-                            for (const auto& edge : Tu) {
-                                if(table.get_probability(i, j, 1-std::get<float>(edge)) <= 1 - delta) {
-                                    edges.push_back(edge);
-                                }
-                                else break;
+                            for (const auto& local : local_edges) {
+                                edges.insert(edges.end(), local.begin(), local.end());
                             }
 
                             std::sort(edges.begin(), edges.end());
@@ -288,7 +283,7 @@ namespace puffinn{
                         edges.insert(edges.end(), local_top.begin(), local_top.end());
 
                         // Every ẋ iterations we have a batch, construct the MST from the global edges
-                        if (j%50 == 0) {
+                        if (((int)MAX_REPETITIONS/2)%(j+1) == 0) {
                             #pragma omp critical
                             {
                             // Move the top edges in with the new edges, in this way we keep the last spanning tree
@@ -322,7 +317,7 @@ namespace puffinn{
                                     found = false;
                                 }
                          
-                                std::cout << "Tree weight: " << tree_weight << std::endl;
+                                std::cout << "Tree weight: " << tree_weight << " Bound weight: " << (1+epsilon)*bound_weight(top, i, j) << std::endl;
                             }
                             // Lose the unused edges
                             edges.clear();
@@ -351,7 +346,7 @@ namespace puffinn{
                 // Evaluate all pair distances
                 for (auto couple : couples) {
                     // If the distance is less than the threshold, add it to the confirmed edges
-                    if (table.get_probability(st.i, st.j, 1-std::get<0>(couple))  <= 1 - delta) {
+                    if (table.get_probability(st.i, st.j, 1-std::get<0>(couple))  <  delta) {
                         Tc_local.emplace_back(couple);
                     }
                     // Otherwise, add it to the unconfirmed edges
@@ -372,7 +367,7 @@ namespace puffinn{
                 for (const auto& edge : top_copy) {
                     auto edge_weight = std::get<0>(edge);  
                     auto probability = table.get_probability(i, j, 1-edge_weight);
-                    if (probability <= 1 - delta) {
+                    if (probability < delta) {
                         weight += edge_weight;
                         if (edge_weight > max_confirmed) {
                             max_confirmed = edge_weight;
@@ -412,11 +407,9 @@ namespace puffinn{
                 //     std::cout << edge.first << " " << edge.second << std::endl;
                 // }
 
-                for (const auto& v : visited) {
-                    if (!v) {
-                        std::cout << "Not connected" << std::endl;
-                        return false;
-                    }
+                if (!std::accumulate(visited.begin(), visited.end(),true, std::logical_and<bool>())){
+                    std::cout << "Not connected" << std::endl;
+                    return false;
                 }
                 std::cout << "Connected" << std::endl;
 
