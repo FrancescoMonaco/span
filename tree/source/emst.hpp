@@ -101,11 +101,9 @@ namespace puffinn{
              * 2. Inserting all input vectors into the index
              * 3. Rebuilding the index structure
              * 4. Construct a Union Find data structure
-             * 5. 
-             * 
              * The constructor takes ownership of the input data through a move operation.
              */
-            EMST(uint32_t dimensionality, uint64_t memory_limit, std::vector<std::vector<float>> &data_in, const float delta = 0.2, const float epsilon = 0.2)
+            EMST(uint32_t dimensionality, uint64_t memory_limit, std::vector<std::vector<float>> &data_in, const float delta = 0.3, const float epsilon = 0.01)
                 : dimensionality(dimensionality),
                   memory_limit(memory_limit),
                   table(Index<CosineSimilarity,FHTCrossPolytopeHash, SimHash>(dimensionality, memory_limit)),
@@ -129,7 +127,7 @@ namespace puffinn{
             /// @brief Destructor
             ~EMST() = default;
             
-            /// @brief Computes the exact MST by doing all pairwise comparisons
+            /// @brief Computes the exact MST with Kruskal's algorithm in a naive way
             /// @return weight of the exact MST
             float exact_tree(){
                 // Clear from any previous runs
@@ -167,11 +165,10 @@ namespace puffinn{
             /// @brief Find the Minimum Spanning Tree using only confirmed edges
             std::vector<std::pair<unsigned int, unsigned int>> find_tree() {    
                 std::vector<std::pair<unsigned int, unsigned int>> tree;
-                std::vector<std::vector<EdgeTuple>> local_edges (num_data);
-                std::vector<std::vector<EdgeTuple>> local_Tus (num_data);
+                std::vector<std::vector<EdgeTuple>> local_edges (MAX_REPETITIONS);
+                std::vector<std::vector<EdgeTuple>> local_Tus (MAX_REPETITIONS);
 
                 bool found = false;
-                float max_confirmed = 0;
                 std::vector<EdgeTuple> edges;
                 for (int i=MAX_HASHBITS; i>= 0; i--) {
                     if (found) {
@@ -183,55 +180,65 @@ namespace puffinn{
                             continue;
                         }
                         DSU local_dsu(num_data);
-                        std::vector<EdgeTuple>local_Tc, local_top;
-                        enumerate_edges(segments[j], local_Tus[j], local_Tc);    
-
-
-                        std::sort(local_Tc.begin(), local_Tc.end());
-                        for(auto edge : local_Tc) {
-                            if (std::get<float>(edge) > max_confirmed) {
-                                max_confirmed = std::get<float>(edge);
-                            }
+                        std::vector<EdgeTuple> local_Tc, local_top;
+                        enumerate_edges(segments[j], local_Tus[j], local_Tc);   
+                        for(const auto& edge : local_Tc) {
                             add_edge(edge, local_dsu, local_top);
                         }
-                        local_edges[j].insert(local_edges[j].end(), local_top.begin(), local_top.end());
+                        for (const auto& edge : local_Tus[j]) {
+                            if(local_top.size() == num_data - 1) {
+                                break;
+                            }
+                            if (table.get_probability(i, j, 1-std::get<0>(edge)) < delta) {
+                            add_edge(edge, local_dsu, local_top);
+                            }
+                            else break;
+                        }
+                        local_edges[j].insert(local_edges[j].end(),
+                                                std::make_move_iterator(local_top.begin()),
+                                                std::make_move_iterator(local_top.end()));
+                        local_top.clear();
                         
-
-
                         #pragma omp critical
                         {
                         // Every x iterations we have a batch, construct the MST from these edges
-                        if (((int)MAX_REPETITIONS/2)%(j+1) == 0) {   
+                        if ((j+1)%(MAX_REPETITIONS/4) == 0 && !found) { 
                             //Move the top edges in with the new edges
-                            edges.insert(edges.end(), top.begin(), top.end());
+                            edges.insert(edges.end(), 
+                                         std::make_move_iterator(top.begin()),
+                                         std::make_move_iterator(top.end()));
                             top.clear();
-                            dsu_true = DSU(num_data);
-                            for (const auto& local : local_edges) {
-                                edges.insert(edges.end(), local.begin(), local.end());
-                            }
 
-                            std::sort(edges.begin(), edges.end());
-                            for (const auto& edge : edges) {
-                                add_edge(edge, dsu_true, top);
+                            dsu_true = DSU(num_data);
+                            for (auto& local : local_edges) {
+                                edges.insert(edges.end(), std::make_move_iterator(local.begin()), std::make_move_iterator(local.end()));
+                                local.clear();
+                            }
+                            if (!edges.size() < num_data -1) {
+
+                                std::sort(edges.begin(), edges.end());
+                                for (const auto& edge : edges) {
+                                    add_edge(edge, dsu_true, top);
+                                    if (top.size() == num_data - 1) {
+                                        break;
+                                    }
+                                }
+                                std::cout << "Tree size: " << top.size() << std::endl;
                                 if (top.size() == num_data - 1) {
-                                    break;
+                                    float tree_weight = 0;
+                                    for (const auto& edge : top) {
+                                        tree_weight += std::get<0>(edge);
+                                    }                           
+                                    std::cout << "Tree weight: " << tree_weight << std::endl;
+                                    found = true;
+                                    // Fill the tree
+                                    for (const auto& edge : top) {
+                                        tree.push_back(std::get<1>(edge));
+                                    }
                                 }
+                                // Lose the unused edges
+                                edges.clear();
                             }
-                            //std::cout << "Top size: " << top.size() << std::endl;
-                            if (top.size() == num_data - 1) {
-                                float tree_weight = 0;
-                                for (const auto& edge : top) {
-                                    tree_weight += std::get<0>(edge);
-                                }                           
-                                std::cout << "Tree weight: " << tree_weight << std::endl;
-                                found = true;
-                                // Fill the tree
-                                for (const auto& edge : top) {
-                                    tree.push_back(std::get<1>(edge));
-                                }
-                            }
-                            // Lose the unused edges
-                            edges.clear();
                         }
                         }
                     }
@@ -249,6 +256,7 @@ namespace puffinn{
                 std::vector<std::pair<unsigned int, unsigned int>> tree;
                 bool found = false;
                 std::vector<EdgeTuple> edges;
+                std::vector<std::vector<EdgeTuple>> local_edges (MAX_REPETITIONS);
 
                 for (int i=MAX_HASHBITS; i>= 0; i--) {
                     if (found) {
@@ -276,24 +284,26 @@ namespace puffinn{
                         }
 
                         // The edges of the local spanning tree are added to the global edges
-                        #pragma omp critical
-                        {
-                        edges.insert(edges.end(), 
+
+                        local_edges[j].insert(local_edges[j].end(), 
                                         std::make_move_iterator(local_top.begin()),
                                         std::make_move_iterator(local_top.end()));
-                        }
+                        local_top.clear();
 
-
+                        #pragma omp critical
+                        {
                         // Every ẋ iterations we have a batch, construct the MST from the global edges
-                        if (((int)MAX_REPETITIONS/2)%(j+1)==0) {
-                            #pragma omp critical
-                            {
+                        if ((int)(j+1)%(MAX_REPETITIONS/2) == 0 && !found) {
                             // Move the top edges in with the new edges, in this way we keep the last spanning tree
                             // But we allow for a better solution
                             edges.insert(edges.end(),
                                         std::make_move_iterator(top.begin()),
                                         std::make_move_iterator(top.end()));
                             top.clear();
+                            for (auto& local : local_edges) {
+                                edges.insert(edges.end(), std::make_move_iterator(local.begin()), std::make_move_iterator(local.end()));
+                                local.clear();
+                            }
                             dsu_true = DSU(num_data);
                             // This is just Kruksal's algorithm, top stores our global spanning tree
                             std::sort(edges.begin(), edges.end());
@@ -324,10 +334,7 @@ namespace puffinn{
                          
                                 std::cout << "Tree weight: " << tree_weight << " Bound weight: " << (1+epsilon)*bound_weight(top, i, j) << std::endl;
                             }
-                            // Lose the unused edges
-                            //edges.clear();
-
-                            }
+                        }
                         }
                     }
                     // Move to the next prefix
@@ -346,26 +353,32 @@ namespace puffinn{
             /// @param st CollisionEnumerator object that stores the repetition and the prefix
             /// @param Tu_local vector that stores the unconfirmed edges
             /// @param Tc_local vector that stores the confirmed edges
-            void enumerate_edges(CollisionEnumerator st, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local) {
+            void enumerate_edges(CollisionEnumerator& st, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local) {
                 // Discover edges that share the same prefix at iteration st.i, st.j
                 std::vector<EdgeTuple> couples = table.all_close_pairs(st);
+                std::sort(couples.begin(), couples.end());
+                size_t index = 0;
                 // Evaluate all pair distances
                 for (auto couple : couples) {
                     // If the distance is less than the threshold, add it to the confirmed edges
                     if (table.get_probability(st.i, st.j, 1-std::get<0>(couple))  <  delta) {
-                        Tc_local.emplace_back(couple);
+                        index++;
                     }
-                    // Otherwise, add it to the unconfirmed edges
-                    else{
-                        if (Tu_local.size() > num_data*10) {
-                            // Resize the vector
-                            continue;
-                        }
-                        Tu_local.emplace_back(couple);
+                    else {
+                        break;
                     }
                 }
-                std::sort(Tc_local.begin(), Tc_local.end());
-                std::sort(Tu_local.begin(), Tu_local.end());
+                // Split the couples into confirmed and unconfirmed edges
+                Tc_local.insert(Tc_local.end(), std::make_move_iterator(couples.begin()), std::make_move_iterator(couples.begin()+index));
+                // Tu local must have at most 10*num_data edges
+                // Find if we can insert all the rest of the edges or we have to cut them
+                if (couples.size() - index > 5*num_data) {
+                    Tu_local.insert(Tu_local.end(), std::make_move_iterator(couples.begin()+index), std::make_move_iterator(couples.begin()+index+5*num_data));
+                }
+                else {
+                    Tu_local.insert(Tu_local.end(), std::make_move_iterator(couples.begin()+index), std::make_move_iterator(couples.end()));
+                }
+
                 return;
             };
 
@@ -393,7 +406,7 @@ namespace puffinn{
                 return weight;
             }
 
-            bool is_connected(std::vector<std::pair<unsigned int, unsigned int>> tree) {
+            bool is_connected(std::vector<std::pair<unsigned int, unsigned int>>& tree) {
                 // Check if the tree is connected
                 std::vector<std::pair<unsigned int, unsigned int>> edges = tree;
                 std::vector<bool> visited(num_data, false);
