@@ -1,42 +1,47 @@
 {
-  description = "Description for the project";
+  description = "PUFFINN - Parameterless and Universal Fast FInding of Nearest Neighbors";
 
-  inputs = {
-    flake-parts.url = "github:hercules-ci/flake-parts";
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+  outputs = {
+    self,
+    nixpkgs,
+  }: let
+    supportedSystems = ["x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin"];
+    forEachSupportedSystem = f:
+      nixpkgs.lib.genAttrs supportedSystems (system:
+        f {
+          pkgs = import nixpkgs {inherit system;};
+        });
+  in {
+    devShells = forEachSupportedSystem ({pkgs}: {
+      default = pkgs.mkShell {
+        venvDir = ".venv";
+        packages = with pkgs; [
+          python310
+          sqlite-interactive
+          samply
+          cmake
+          gcc
+          llvmPackages.openmp
+          glibc
+          boost
+          valgrind
+          libunwind
+          zlib
+          elfutils
+          glibc.dev
+        ] ++ ( with python310Packages; [
+          setuptools
+          wheel
+          venvShellHook
+          numpy
+          h5py
+        ]);
+          shellHook = ''
+    export NIX_CFLAGS_COMPILE="$NIX_CFLAGS_COMPILE -funwind-tables -rdynamic"
+  '';
+      };
+    });
   };
-
-  outputs = inputs@{ flake-parts, ... }:
-    flake-parts.lib.mkFlake { inherit inputs; } {
-      imports = [
-        # To import a flake module
-        # 1. Add foo to inputs
-        # 2. Add foo as a parameter to the outputs function
-        # 3. Add here: foo.flakeModule
-
-      ];
-      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
-      perSystem = { config, self', inputs', pkgs, system, ... }: {
-        # Per-system attributes can be defined here. The self' and inputs'
-        # module parameters provide easy access to attributes of the same
-        # system.
-        devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
-            samply
-            cmake
-            gcc
-            llvmPackages.openmp
-          ];
-        };
-
-        # Equivalent to  inputs'.nixpkgs.legacyPackages.hello;
-        packages.default = pkgs.hello;
-      };
-      flake = {
-        # The usual flake attributes can be defined here, including system-
-        # agnostic ones like nixosModule and system-enumerating ones, although
-        # those are more easily expressed in perSystem.
-
-      };
-    };
 }
