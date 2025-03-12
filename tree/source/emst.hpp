@@ -296,18 +296,11 @@ namespace puffinn{
                             }
                             add_edge(edge, local_dsu, local_top);
                         }
-                        // if (local_Tu.size() > 0)    
-                        //     max_dist = std::get<0>(local_Tu.back());
-
                         // The edges of the local spanning tree are added to the global edges
-
                         local_edges[j].insert(local_edges[j].end(), 
                                         std::make_move_iterator(local_top.begin()),
                                         std::make_move_iterator(local_top.end()));
                         local_top.clear();
-                        // local_Tcs[j].clear();
-                        // local_Tus[j].clear();
-
 
                         #pragma omp critical
                         {
@@ -331,7 +324,6 @@ namespace puffinn{
                                     break;
                                 }
                             }
-                            //max_dist = std::get<0>(edges.back());
                             edges.clear();
                             // If we have a tree, we check if it is a valid ɛ-EMST
                             if (top.size() == num_data - 1) {
@@ -392,8 +384,8 @@ namespace puffinn{
                 }
                 // Split the couples into confirmed and unconfirmed edges
                 Tc_local.insert(Tc_local.end(), std::make_move_iterator(couples.begin()), std::make_move_iterator(couples.begin()+index));
-                // Tu local must have at most 10*num_data edges
-                //Find if we can insert all the rest of the edges or we have to cut them
+                // We can limit Tu_local to store at most 10*n unconfirmed edges
+                // Find if we can insert all the rest of the edges or we have to cut them
                 // if (couples.size() - index > 5*num_data) {
                 //     Tu_local.insert(Tu_local.end(), std::make_move_iterator(couples.begin()+index), std::make_move_iterator(couples.begin()+index+5*num_data));
                 // }
@@ -411,6 +403,7 @@ namespace puffinn{
                 float weight = 0;
                 float max_confirmed = 0;
                 int unconfirmed = 0;
+                // Add the weight of the confirmed edges, keep track of the max confirmed and count the unconfirmed ones
                 for (const auto& edge : top_copy) {
                     auto edge_weight = std::get<0>(edge);  
                     auto probability = table.get_probability(i, j, 1-edge_weight);
@@ -489,6 +482,9 @@ namespace puffinn{
             /// @brief Clear the data structures from previous runs
             void clear() {
                 top.clear();
+                for (auto& local : local_edges) {
+                    local.clear();
+                }
             }
             
     };  //closes class
