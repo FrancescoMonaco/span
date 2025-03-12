@@ -16,7 +16,9 @@
 #include <istream>
 #include <memory>
 #include <iostream>
+#include <fstream>
 #include <vector>
+#include <set>
 
 namespace puffinn {
     /// Approaches to filtering candidates.
@@ -39,7 +41,7 @@ namespace puffinn {
         size_t i, j;
     };
 
-    using EdgeTuple = std::tuple<float, std::pair<unsigned int, unsigned int>>;
+    using EdgeTuple = std::tuple<float, std::pair<uint32_t, uint32_t>>;
 
 
     class ChunkSerializable {
@@ -482,21 +484,33 @@ namespace puffinn {
                     }
                     // Create a tuple that contains all the pairs of ranges that share the same hash value.
                     std::vector<std::pair<uint32_t, uint32_t>> new_range;
-                    // Insert the ones that we already merged, then add the new ones.
-
-                    new_range.insert(new_range.end(), range_curr.begin(), range_curr.end());
+                    // Collapse the ones we merged before, their cross product was already computed so we just need their cross
+                    // product with the new ones
+                    new_range.insert(new_range.end(), std::make_pair(range_curr.begin()->first, (std::prev(range_curr.begin()))->second));
                     for (int g = 0; g < offset; g++) {
                         auto range_g = segment.ranges[f + g + 1];
                         new_range.insert(new_range.end(), range_g.begin(), range_g.end());
                     }
                     //Print the new range
+                    // std::cout << "New range \n";
+                    // for (auto& pair : new_range) {
+                    //     std::cout << pair.first << " " << pair.second << " - ";
+                    // }
+                    // std::cout << std::endl;
                     //std::cout << "New range: " << new_range.size() << std::endl;
                     new_segments.push_back(new_range);
                 }
-                if (new_segments.size() > 0) {
+
                     //std::cout << "New segments size: " << new_segments.size() << std::endl;
+                    //Print the new segments
+                    // std::cout << "Segments for table " << segment.j << std::endl;   
+                    // for (auto& range : new_segments) {
+                    //     for (auto& pair : range) {
+                    //         std::cout << pair.first << " " << pair.second << " - ";
+                    //     }
+                    //     std::cout << std::endl;
+                    // }
                 segment.ranges = new_segments;
-                }
             }
             return; 
         }
@@ -513,21 +527,25 @@ namespace puffinn {
         }
 
         std::vector<EdgeTuple> all_close_pairs(
-            const CollisionEnumerator& segment
+            const CollisionEnumerator& segment,
+            const float& threshold,
+            std::set<std::pair<uint32_t, uint32_t>>& copies
         ) {
+            // std::ofstream file("synth2.csv", std::ios::app);
+            // if (!file.is_open()) {
+            //     std::cout << "Error opening file" << std::endl;
+            // }
             // std::cout << "Segment size: " << segment.ranges.size() << std::endl;
             // Return all pairs that share the same hash value in table j at length i.
             std::vector<EdgeTuple> res;
             std::vector<std::vector<EdgeTuple>> local_res(segment.ranges.size()); 
             std::vector<uint32_t> segments;
-                //int index = 0;
+                int index = 0;
                 auto j = segment.j;
                 auto i = segment.i;
                 //std::cout << "Are we alive";
                 // If it's the full hash we just have to compute the pairs in each pair of the tuples
                 if (i == MAX_HASHBITS) {
-                    // std::cout << "If" << std::endl;
-                    // std::cout << segment.ranges.size() << std::endl; 
                     #pragma omp parallel for   
                     for ( uint32_t local_idx = 0; local_idx < segment.ranges.size(); local_idx++) {
                         const auto& range = segment.ranges[local_idx];
@@ -535,12 +553,25 @@ namespace puffinn {
                             for (uint32_t s = r + 1; s < range[0].second; s++) {
                                 auto R = lsh_maps[j].indices[r];
                                 auto S = lsh_maps[j].indices[s];
-                                // TODO: change with the actual dimensionality
                                 float dist = TSim::compute_similarity(
                                     dataset[R], 
                                     dataset[S], 
                                     dataset.get_description());
                                 local_res[local_idx].emplace_back(1-dist, std::make_pair(R, S));
+                                // Check if the pair is already in the set
+                                #pragma omp critical
+                                {
+                                    bool result;
+                                // Insert them with the ordered indices
+                                if (R < S) {
+                                    std::tie(std::ignore, result) = copies.insert(std::make_pair(R, S));
+                                } else {
+                                    std::tie(std::ignore, result) =  copies.insert(std::make_pair(S, R));
+                                }
+                                if (!result) index++;
+                                }
+                                //file << std::to_string(i) << "," << std::to_string(j) << "," << std::to_string(R) << "," << std::to_string(S) << "," << std::to_string(1-dist) << std::endl;
+
                             }
                         }
                     }
@@ -569,6 +600,21 @@ namespace puffinn {
                                            // std::cout << "Distance: " << dist << std::endl;
                                         //l2_distance_float_simple(dataset[R], dataset[S], 2);
                                         local_res[local_idx].emplace_back(1-dist, std::make_pair(R, S));
+                                        #pragma omp critical
+                                        {
+                                            bool result;
+                                            // Insert them with the ordered indices
+                                            if (R < S) {
+                                                std::tie(std::ignore, result) = copies.insert(std::make_pair(R, S));
+                                            } else {
+                                                std::tie(std::ignore, result) =  copies.insert(std::make_pair(S, R));
+                                            }
+                                            if (!result) {
+                                                index++;
+                                                std::cout << "Pair indices: " << index_f << " " << index_g << std::endl;
+                                            }                                        
+                                        }
+                                        //file << std::to_string(i) << "," << std::to_string(j) << "," << std::to_string(R) << "," << std::to_string(S) << "," << std::to_string(1-dist) << std::endl;
                                     }
                                 }
                             }
@@ -577,8 +623,11 @@ namespace puffinn {
                 }
 
             for(const auto& local_res_vec : local_res){
-                res.insert(res.end(), local_res_vec.begin(), local_res_vec.end());
+                res.insert(res.end(), std::make_move_iterator(local_res_vec.begin()), std::make_move_iterator(local_res_vec.end()));
             }
+            if (index != 0)
+                std::cout << "Pairs skipped: " << index << std::endl;
+            //file.close();
             return res;
 
         }

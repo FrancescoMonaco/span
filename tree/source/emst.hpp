@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <unistd.h>
 #include <stack>
+#include <set>
 using EdgeTuple = std::tuple<float, std::pair<uint32_t, uint32_t>>;
 
 namespace puffinn{
@@ -82,6 +83,7 @@ namespace puffinn{
         // Sets for the confimed and the unconfirmed edges
         std::vector<EdgeTuple> top;
         std::vector<std::vector<EdgeTuple>> local_edges;
+        std::vector<std::set<std::pair<uint32_t, uint32_t>> > copies;
 
 
         public:
@@ -118,6 +120,7 @@ namespace puffinn{
                 MAX_REPETITIONS = table.get_repetitions();
                 segments = table.order_segments();
                 local_edges.resize(MAX_REPETITIONS);
+                copies.resize(MAX_REPETITIONS);
                 //dirty_start(local_Tus[0]);
                 std::cout << "Index constructed " << MAX_REPETITIONS <<  " L, K " << MAX_HASHBITS << " num data " << num_data << std::endl;
             };
@@ -166,7 +169,7 @@ namespace puffinn{
 
                 bool found = false;
                 std::vector<EdgeTuple> edges;
-                for (int i=MAX_HASHBITS; i>= 0; i--) {
+                for (int i=MAX_HASHBITS; i> 0; i--) {
                     if (found) {
                         break;
                     }
@@ -308,16 +311,15 @@ namespace puffinn{
                         // local_Tus[j].clear();
 
 
-                       // #pragma omp critical
+                        #pragma omp critical
                         {
                         // Every ẋ iterations we have a batch, construct the MST from the global edges
                         if ((j+1)%((int)MAX_REPETITIONS) == 0 && j!=0 && !found) {
                             // Move the top edges in with the new edges, in this way we keep the last spanning tree
                             // But we allow for a better solution
-                            edges.insert(edges.end(),
-                                        std::make_move_iterator(top.begin()),
-                                        std::make_move_iterator(top.end()));
+                            edges.insert(edges.end(), std::make_move_iterator(top.begin()), std::make_move_iterator(top.end()));                           
                             top.clear();
+
                             for (auto& local : local_edges) {
                                 edges.insert(edges.end(), std::make_move_iterator(local.begin()), std::make_move_iterator(local.end()));
                                 local.clear();
@@ -363,6 +365,7 @@ namespace puffinn{
                     }
                     // Move to the next prefix
                     table.merge_segments(segments);
+                    std::cout << "Prefix " << i << " completed" << std::endl;
                 }
                 // Check for connectivity
                 is_connected(tree);
@@ -379,9 +382,9 @@ namespace puffinn{
             /// @param Tc_local vector that stores the confirmed edges
             void enumerate_edges(CollisionEnumerator& st, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local, float max_dist=0) {
                 // Discover edges that share the same prefix at iteration st.i, st.j
-                std::vector<EdgeTuple> couples = table.all_close_pairs(st, max_dist);
+                std::vector<EdgeTuple> couples = table.all_close_pairs(st, max_dist,copies[st.j]);
                 std::sort(couples.begin(), couples.end());
-                std::cout << "Size couples: " << couples.size() << std::endl;
+                //std::cout << "Size couples: " << couples.size() << std::endl;
                 size_t index = 0;
                 if (couples.size() == 0) return;
                 // Evaluate all pair distances
