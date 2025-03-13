@@ -267,7 +267,7 @@ namespace puffinn{
 
             }
 
-            /// @brief Find the ɛ-EMST
+            /// @brief Find the ɛ-EMST using both confirmed and unconfirmed edges
             std::vector<std::pair<unsigned int, unsigned int>> find_epsilon_tree() {
                 // Variables to store the tree and the edges
                 std::vector<std::pair<unsigned int, unsigned int>> tree;
@@ -278,7 +278,7 @@ namespace puffinn{
                     if (found) {
                         break;
                     }
-                   //#pragma omp parallel for
+                   #pragma omp parallel for
                     for (size_t j=0; j<MAX_REPETITIONS; j++) {
                         if (found) {
                             continue;
@@ -373,7 +373,7 @@ namespace puffinn{
                 // Discover edges that share the same prefix at iteration st.i, st.j
                 std::vector<EdgeTuple> couples = table.all_close_pairs(st,probabilities[st.j]);
                 std::sort(couples.begin(), couples.end());
-                //std::cout << "Size couples: " << couples.size() << std::endl;
+                std::cout << "Size couples: " << couples.size() << std::endl;
                 size_t index = 0;
                 if (couples.size() == 0) return;
                 // Evaluate all pair distances
@@ -431,6 +431,9 @@ namespace puffinn{
                 return weight;
             }
 
+            /// @brief Checks wheter a tree is connected
+            /// @param tree the tree that we want to check
+            /// @return true if all edge are connected, false otherwise.
             bool is_connected(std::vector<std::pair<unsigned int, unsigned int>>& tree) {
                 // Check if the tree is connected
                 std::vector<std::pair<unsigned int, unsigned int>> edges = tree;
@@ -466,6 +469,11 @@ namespace puffinn{
                 return true;
             };
             
+            /// @brief Add the edge to the tree if it does not create a cycle using the DSU data structure
+            /// @param new_edge_input the edge that we have to add
+            /// @param dsu the data structure that keeps track of the connected components
+            /// @param edge_list the current edges in the tree
+            /// @return true if an edge has been added to the edge_list and the DSU data structure, false otherwise
             bool add_edge(const EdgeTuple& new_edge_input, DSU &dsu, std::vector<EdgeTuple>& edge_list) {
                 // Extract new edge and its weight.
                 std::pair<unsigned int, unsigned int> new_edge = std::get<1>(new_edge_input);
