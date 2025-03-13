@@ -426,7 +426,7 @@ namespace puffinn {
                 ce.j = f;
                 //std::cout << "Table " << f << std::endl;
                 // The first and last segment are filled with filler elements. I guess
-                for (size_t j = 6; j < lsh_maps[f].hashes.size() -6; j++) {
+                for (size_t j = 10; j < lsh_maps[f].hashes.size() -10; j++) {
                     //std::cout << lsh_maps[f].hashes[j] << " ";
                     if (lsh_maps[f].hashes[j] != lsh_maps[f].hashes[j-1]) {
                         segment.push_back(j);
@@ -526,18 +526,18 @@ namespace puffinn {
         }
 
         std::vector<EdgeTuple> all_close_pairs(
-            const CollisionEnumerator& segment
+            const CollisionEnumerator& segment,
+            const float& prob
         ) {
-            std::ofstream file("synth2.csv", std::ios::app);
+            std::ofstream file("Glove_sampl.csv", std::ios::app);
             if (!file.is_open()) {
                 std::cout << "Error opening file" << std::endl;
             }
-            // std::cout << "Segment size: " << segment.ranges.size() << std::endl;
-            // Return all pairs that share the same hash value in table j at length i.
+            //std::cout << "Segment size: " << segment.ranges.size() << std::endl;
+            //Return all pairs that share the same hash value in table j at length i.
             std::vector<EdgeTuple> res;
             std::vector<std::vector<EdgeTuple>> local_res(segment.ranges.size()); 
             std::vector<uint32_t> segments;
-                int index = 0;
                 auto j = segment.j;
                 auto i = segment.i;
                 //std::cout << "Are we alive";
@@ -546,16 +546,33 @@ namespace puffinn {
                     //#pragma omp parallel for   
                     for ( uint32_t local_idx = 0; local_idx < segment.ranges.size(); local_idx++) {
                         const auto& range = segment.ranges[local_idx];
+                        unsigned int number_i = 0;
                         for (uint32_t r = range[0].first; r < range[0].second; r++) {
                             for (uint32_t s = r + 1; s < range[0].second; s++) {
+                                ++number_i;
                                 auto R = lsh_maps[j].indices[r];
                                 auto S = lsh_maps[j].indices[s];
-                                float dist = TSim::compute_similarity(
-                                    dataset[R], 
-                                    dataset[S], 
-                                    dataset.get_description());
-                                local_res[local_idx].emplace_back(1-dist, std::make_pair(R, S));
-                                file << std::to_string(i) << "," << std::to_string(j) << "," << std::to_string(R) << "," << std::to_string(S) << "," << std::to_string(1-dist) << std::endl;
+                                // Let's use reservoir sampling
+                                if (local_res[local_idx].size() < dataset.get_size()) {
+                                    float dist = TSim::compute_similarity(
+                                        dataset[R], 
+                                        dataset[S], 
+                                        dataset.get_description());
+                                    local_res[local_idx].emplace_back(1-dist, std::make_pair(R, S));
+                                    file << std::to_string(i) << "," << std::to_string(j) << "," << std::to_string(R) << "," << std::to_string(S) << "," << std::to_string(1-dist) << std::endl;
+                                }
+                                else{
+                                    unsigned int index = random() % number_i;
+                                    if (index < dataset.get_size()){
+
+                                        float dist = TSim::compute_similarity(
+                                            dataset[R], 
+                                            dataset[S], 
+                                            dataset.get_description());
+                                        local_res[local_idx][index] = std::make_tuple(1-dist, std::make_pair(R, S));
+                                        file << std::to_string(i) << "," << std::to_string(j) << "," << std::to_string(R) << "," << std::to_string(S) << "," << std::to_string(1-dist) << std::endl;
+                                    }
+                                }
 
                             }
                         }
@@ -565,23 +582,28 @@ namespace puffinn {
                 // Else we have to compute the pairs just between the products of the ranges in the tuples, 
                 // no inner pairs, we already took care of that.
                 else {
+                    // Sampler
+                    std::random_device rd;
+                    std::mt19937 gen(rd());
+                    std::discrete_distribution<> distr({1-(4/prob*lsh_maps.size()), 4/prob*lsh_maps.size()});
                     //#pragma omp parallel for
                     for (unsigned int local_idx = 0; local_idx < segment.ranges.size(); local_idx++) {  
-                        const auto& range = segment.ranges[local_idx];                      
+                        const auto& range = segment.ranges[local_idx];   
                         for(size_t f = 0; f < range.size(); f++){
                             for (size_t g = f + 1; g < range.size(); g++){
                                 for(uint32_t index_f = range[f].first; index_f < range[f].second; index_f++){
                                     for(uint32_t index_g = range[g].first; index_g < range[g].second; index_g++){
                                         auto R = lsh_maps[j].indices[index_f];
                                         auto S = lsh_maps[j].indices[index_g];
-                                        float dist = TSim::compute_similarity(
-                                            dataset[R], 
-                                            dataset[S], 
-                                            dataset.get_description());
-                                           // std::cout << "Distance: " << dist << std::endl;
-                                        //l2_distance_float_simple(dataset[R], dataset[S], 2);
-                                        local_res[local_idx].emplace_back(1-dist, std::make_pair(R, S));
+                                        // Let's sample with probability 4/prob*lsh_maps.size()
+                                        if(distr(gen) == 1){
+                                            float dist = TSim::compute_similarity(
+                                                dataset[R], 
+                                                dataset[S], 
+                                                dataset.get_description());
+                                            local_res[local_idx].emplace_back(1-dist, std::make_pair(R, S));
                                         file << std::to_string(i) << "," << std::to_string(j) << "," << std::to_string(R) << "," << std::to_string(S) << "," << std::to_string(1-dist) << std::endl;
+                                        }
                                     }
                                 }
                             }
@@ -593,7 +615,7 @@ namespace puffinn {
                 res.insert(res.end(), std::make_move_iterator(local_res_vec.begin()), std::make_move_iterator(local_res_vec.end()));
             }
 
-            file.close();
+            // file.close();
             return res;
 
         }

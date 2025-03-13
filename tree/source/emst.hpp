@@ -83,6 +83,7 @@ namespace puffinn{
         // Sets for the confimed and the unconfirmed edges
         std::vector<EdgeTuple> top;
         std::vector<std::vector<EdgeTuple>> local_edges;
+        std::vector<float> probabilities;
 
 
         public:
@@ -119,6 +120,7 @@ namespace puffinn{
                 MAX_REPETITIONS = table.get_repetitions();
                 segments = table.order_segments();
                 local_edges.resize(MAX_REPETITIONS);
+                probabilities.resize(MAX_REPETITIONS, 1);
                 //dirty_start(local_Tus[0]);
                 std::cout << "Index constructed " << MAX_REPETITIONS <<  " L, K " << MAX_HASHBITS << " num data " << num_data << std::endl;
             };
@@ -258,6 +260,7 @@ namespace puffinn{
                     }
                     // Move to the next prefix
                     table.merge_segments(segments);
+                    std::cout << "Finished prefix " << i << std::endl;
                 }
                 is_connected(tree);
                 return tree;
@@ -275,7 +278,7 @@ namespace puffinn{
                     if (found) {
                         break;
                     }
-                   #pragma omp parallel for
+                   //#pragma omp parallel for
                     for (size_t j=0; j<MAX_REPETITIONS; j++) {
                         if (found) {
                             continue;
@@ -305,7 +308,7 @@ namespace puffinn{
                         #pragma omp critical
                         {
                         // Every ẋ iterations we have a batch, construct the MST from the global edges
-                        if ((j+1)%((int)MAX_REPETITIONS/4) == 0 && j!=0 && !found) {
+                        if ((j+1)%((int)MAX_REPETITIONS/4) == 0 && !found) {
                             // Move the top edges in with the new edges, in this way we keep the last spanning tree
                             // But we allow for a better solution
                             edges.insert(edges.end(), std::make_move_iterator(top.begin()), std::make_move_iterator(top.end()));                           
@@ -325,6 +328,7 @@ namespace puffinn{
                                 }
                             }
                             edges.clear();
+                            probabilities = std::vector<float>(MAX_REPETITIONS, std::get<float>(top[(int)top.size()/2]));
                             // If we have a tree, we check if it is a valid ɛ-EMST
                             if (top.size() == num_data - 1) {
                                 float tree_weight = 0;
@@ -350,7 +354,7 @@ namespace puffinn{
                     }
                     // Move to the next prefix
                     table.merge_segments(segments);
-                    //std::cout << "Prefix " << i << " completed" << std::endl;
+                    std::cout << "Prefix " << i << " completed" << std::endl;
                 }
                 // Check for connectivity
                 is_connected(tree);
@@ -367,9 +371,9 @@ namespace puffinn{
             /// @param Tc_local vector that stores the confirmed edges
             void enumerate_edges(CollisionEnumerator& st, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local) {
                 // Discover edges that share the same prefix at iteration st.i, st.j
-                std::vector<EdgeTuple> couples = table.all_close_pairs(st);
+                std::vector<EdgeTuple> couples = table.all_close_pairs(st,probabilities[st.j]);
                 std::sort(couples.begin(), couples.end());
-                // std::cout << "Size couples: " << couples.size() << std::endl;
+                //std::cout << "Size couples: " << couples.size() << std::endl;
                 size_t index = 0;
                 if (couples.size() == 0) return;
                 // Evaluate all pair distances
@@ -386,12 +390,18 @@ namespace puffinn{
                 Tc_local.insert(Tc_local.end(), std::make_move_iterator(couples.begin()), std::make_move_iterator(couples.begin()+index));
                 // We can limit Tu_local to store at most 10*n unconfirmed edges
                 // Find if we can insert all the rest of the edges or we have to cut them
-                // if (couples.size() - index > 5*num_data) {
-                //     Tu_local.insert(Tu_local.end(), std::make_move_iterator(couples.begin()+index), std::make_move_iterator(couples.begin()+index+5*num_data));
+                if (couples.size() - index > 10*num_data) {
+                    Tu_local.insert(Tu_local.end(), std::make_move_iterator(couples.begin()+index), std::make_move_iterator(couples.begin()+index+10*num_data));
+                }
+                else {
+                    Tu_local.insert(Tu_local.end(), std::make_move_iterator(couples.begin()+index), std::make_move_iterator(couples.end()));
+                }
+                // if (Tu_local.size() > 10*num_data) {
+                //     probabilities[st.j] = table.get_probability(st.i, st.j, 1-std::get<float>(Tu_local[10*num_data]));
                 // }
                 // else {
-                    Tu_local.insert(Tu_local.end(), std::make_move_iterator(couples.begin()+index), std::make_move_iterator(couples.end()));
-                //}
+                // probabilities[st.j] = table.get_probability(st.i, st.j, 1-std::get<float>(Tu_local.back()));
+                // }
                 //std::cout << "Size Tc: " << Tc_local.size() << " Size Tu: " << Tu_local.size() << std::endl;
                 return;
             };
