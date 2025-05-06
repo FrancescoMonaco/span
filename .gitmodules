@@ -1,3 +1,6 @@
 [submodule "puffinn"]
 	path = puffinn
 	url = https://github.com/puffinn/puffinn
+[submodule "panna"]
+	path = panna
+	url = https://github.com/Cecca/panna
