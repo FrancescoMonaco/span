@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-//#include "omp.h"
+#include "omp.h"
 #include "panna/expect.hpp"
 
 namespace panna {
@@ -230,7 +230,7 @@ namespace panna {
             range_start = std::distance(
                 hashes.begin(),
                 std::partition_point( hashes.begin(), hashes.end(), [&]( const auto& h ) {
-                    return h.prefix_less( currrent_hash, prefix_length );
+                    return h.prefix_less( current_hash, prefix_length );
                 } ) );
         }
 
@@ -244,29 +244,45 @@ namespace panna {
                 } ) );
         }
 
-        std::pair<size_t, bool> next( std::vector<std::pair<uint32_t, uint32_t>>& scratch_space ){
+        std::pair<size_t, bool> next( std::vector<std::pair<uint32_t, uint32_t>>& scratch_space ) {
             // Setup
             size_t collisions = 0;
             size_t len_buff = scratch_space.size();
             bool end = true;
 
-            while ( range_end  ) { // do it until we scan all the vector
+            if ( current_index != current_comparison ) { // We have an unfinished run
+                for ( current_index; current_index < range_end - 1; current_index++ ) {
+                    for ( current_comparison; current_comparison < range_end; current_comparison++ ) {                                               
+                        // Full buffer
+                        if ( collisions >= len_buff ) {
+                            end = false;
+                            return std::make_pair( collisions, end );
+                        }
+                        scratch_space[collisions] = std::make_pair( indices[current_index], indices[current_comparison] );
+                        collisions++;
+                    }
+                }
+                // Reset the run indices
+                current_hash = hashes[range_end];
+                current_index = current_comparison = 0;
+            }
+
+            while ( range_end < hashes.size() ) { // do it until we scan all the vector
                 update_range_start();
                 update_range_end();
 
-                for ( size_t current = range_start, current < range_end - 1; current++ ) {
-                    for ( size_t next = current + 1, next < range_end; next++ ) {
+                for ( size_t current = range_start; current < range_end - 1; current++ ) {
+                    for ( size_t next = current + 1; next < range_end; next++ ) {
                         
                         // Full buffer
                         if ( collisions >= len_buff ) {
                             current_index = current;
                             current_comparison = next;
                             end = false;
-                            break; //maybe return
+                            return std::make_pair( collisions, end );
                         }
                         scratch_space[collisions] = std::make_pair( indices[current], indices[next] );
                         collisions++;
-
                     }
                 }
                 // Switch to the next hash
