@@ -15,32 +15,35 @@
         });
   in {
     devShells = forEachSupportedSystem ({pkgs}: {
-      default = pkgs.mkShell {
+      default =(pkgs.mkShell.override { stdenv = pkgs.clangStdenv; }) {
         venvDir = ".venv";
+        
         packages = with pkgs; [
-          python310
+          clang-tools
+          clang-analyzer
+          lldb
+          python312
           sqlite-interactive
-          samply
           cmake
-          gcc
+          just
+          bear # To generate compile_commands.json files
           llvmPackages.openmp
-          glibc
-          boost
+          llvmPackages.libcxx
+          rr
+          gdbgui
           valgrind
-          libunwind
-          zlib
-          elfutils
-          glibc.dev
-        ] ++ ( with python310Packages; [
-          setuptools
-          wheel
+          highfive
+          samply
+        ] ++ ( with python312Packages; [
           venvShellHook
           numpy
           h5py
+          nanobind
+          icecream
+          scikit-build-core
         ]);
-          shellHook = ''
-    export NIX_CFLAGS_COMPILE="$NIX_CFLAGS_COMPILE -funwind-tables -rdynamic"
-  '';
+
+        NIX_ENFORCE_NO_NATIVE = false;
       };
     });
   };

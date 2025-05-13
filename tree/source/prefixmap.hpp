@@ -204,7 +204,7 @@ namespace panna {
             assert( hashes.size() > 0 );
             assert( std::is_sorted( hashes.begin(), hashes.end() ) );
 
-            current_index = current_comparison = 0;
+            current_index = current_comparison = range_start = range_end = 0;
             current_hash = hashes[0];
         }
 
@@ -250,6 +250,7 @@ namespace panna {
             size_t collisions = 0;
             size_t len_buff = scratch_space.size();
             bool end = true;
+            std::cout << "In" <<std::endl;
 
             if ( current_index != current_comparison ) { // We have an unfinished run
                 std::cout << "Unfinished run" << std::endl;
@@ -268,13 +269,12 @@ namespace panna {
                 current_hash = hashes[range_end];
                 current_index = current_comparison = 0;
             }
-
             while ( range_end < hashes.size() ) { // do it until we scan all the vector
                 update_range_start();
                 update_range_end();
-
-                for ( size_t current = range_start; current < range_end - 1; current++ ) {
-                    for ( size_t next = current + 1; next < range_end; next++ ) {
+                std::cout<<"Updated "<< range_start << " " << range_end <<std::endl;
+                for ( size_t current = range_start; current < range_end; current++ ) {
+                    for ( size_t next = current + 1; next < range_end - 1; next++ ) {
                         
                         // Full buffer
                         if ( collisions >= len_buff ) {
