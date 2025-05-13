@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 #include "omp.h"
 #include "panna/expect.hpp"
@@ -251,6 +252,7 @@ namespace panna {
             bool end = true;
 
             if ( current_index != current_comparison ) { // We have an unfinished run
+                std::cout << "Unfinished run" << std::endl;
                 for ( current_index; current_index < range_end - 1; current_index++ ) {
                     for ( current_comparison; current_comparison < range_end; current_comparison++ ) {                                               
                         // Full buffer
@@ -276,6 +278,7 @@ namespace panna {
                         
                         // Full buffer
                         if ( collisions >= len_buff ) {
+                            std::cout << collisions << " " << len_buff << std::endl;
                             current_index = current;
                             current_comparison = next;
                             end = false;
@@ -379,6 +382,10 @@ namespace panna {
 
         PrefixMapCursor<THashValue> create_cursor( THashValue hash ) const {
             return PrefixMapCursor<THashValue>( hash, hashes, indices );
+        }
+
+        PairPrefixMapCursor<THashValue> create_pair_cursor () const {
+            return PairPrefixMapCursor<THashValue> ( hashes, indices );
         }
 
         THashValue hash_for( size_t idx ) const {

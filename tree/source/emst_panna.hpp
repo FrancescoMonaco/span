@@ -1,5 +1,6 @@
 #pragma once
 #include "panna/trieindex.hpp"
+#include "panna/linalg.hpp"
 #include <iostream>
 #include <vector>
 #include <algorithm>
@@ -102,7 +103,7 @@ namespace panna{
             EMST(size_t dimensions, size_t repetitions, typename Hasher::Builder builder, std::vector<std::vector<float>> &data_in, size_t data_dimensionality, const float delta = 0.01, const float epsilon = 0.01)
                 : dimensionality(data_dimensionality),
                   memory_limit(memory_limit),
-                  table(Index(dimensions, builder, repetitions)),
+                  table(Index<Dataset, Hasher, Distance>(dimensions, builder, repetitions)),
                   data(data_in),
                   num_data((data_in).size()),
                   delta(delta),
@@ -112,12 +113,12 @@ namespace panna{
                 // Insert the data
                 for ( auto& point: data_in ) {
                     normalize( point );
+                    table.insert( point.begin(), point.end() );
                 }
-                table.insert(data_in.begin(), data_in.end());
                 table.rebuild();
 
                 // Get info on the index
-                MAX_HASHBITS = builder.get_concatenations();
+                MAX_HASHBITS = table.num_concatenations();
                 MAX_REPETITIONS = table.num_repetitions();
 
                 local_edges.resize(MAX_REPETITIONS);
@@ -140,7 +141,7 @@ namespace panna{
                 #pragma omp parallel for
                 for (uint32_t i = 0; i < num_data; i++) {
                     for (uint32_t j = i+1; j < num_data; j++) {
-                        float dist = Distance::compute(data[i], data[j]);
+                        float dist = table.get_distance( i, j );
                         local_edges[i].emplace_back(dist, std::make_pair(i, j));
                     }
                 }
@@ -175,7 +176,7 @@ namespace panna{
                     if (found) {
                         break;
                     }
-                    #pragma omp parallel for
+                    //#pragma omp parallel for
                     for (size_t j=0; j<MAX_REPETITIONS; j++) {
                         if (found) {
                             continue;
@@ -198,7 +199,7 @@ namespace panna{
                                                 std::make_move_iterator(local_top.end()));
                         local_top.clear();
                         
-                        #pragma omp critical
+                        //#pragma omp critical
                         {
                         // Every x iterations we have a batch, construct the MST from these edges
                         if ((j+1)%((int)MAX_REPETITIONS/4) == 0 && !found) { 
@@ -233,11 +234,7 @@ namespace panna{
                                     //Check that all edges are confirmed by the probability
                                     bool valid = true;
                                     for (const auto& edge : top) {
-                                        auto probability = failure_probability( table.get_hasher(),
-                                                                                std::get<float>(edge),
-                                                                                i,
-                                                                                j+1,
-                                                                                MAX_REPETITIONS );
+                                        auto probability = table.fail_probability( std::get<float>(edge), i, j+1 );
                                         if (probability > delta) {
                                             valid = false;
                                             std::cout << "Not confirmed " << probability << " at distance " << std::get<float>(edge) << std::endl;
@@ -281,7 +278,7 @@ namespace panna{
                     if (found) {
                         break;
                     }
-                   #pragma omp parallel for
+                   //#pragma omp parallel for
                     for (size_t j=0; j<MAX_REPETITIONS; j++) {
                         if (found) {
                             continue;
@@ -308,7 +305,7 @@ namespace panna{
                                         std::make_move_iterator(local_top.end()));
                         local_top.clear();
 
-                        #pragma omp critical
+                       // #pragma omp critical
                         {
                         // Every ẋ iterations we have a batch, construct the MST from the global edges
                         if ((j+1)%((int)MAX_REPETITIONS/4) == 0 && !found) {
@@ -374,17 +371,13 @@ namespace panna{
             void enumerate_edges(size_t i, size_t j, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local) {
                 // Discover edges that share the same prefix at iteration i, j
                 std::vector<EdgeTuple> couples;
-                table.search_pairs(, , j, i, delta, couples);
+                table.search_pairs(j, i, couples);
                 std::cout << "Size couples: " << couples.size() << std::endl;
 
                 // Find the edges that are confirmed and the ones that are not, the edges are ordered by weight so we can binary search the splitting point
                 // We compute the probability using collision_probability(distance) of each edge, and find all the edges that are above the threshold delta
                 auto it = std::partition_point( couples.begin(), couples.end(), [&] (const auto& e) { 
-                    auto failure_prob = failure_probability( table.get_hasher(),
-                    std::get<0>(e),
-                    i,
-                    j+1,
-                    MAX_REPETITIONS);
+                    auto failure_prob = table.fail_probability( std::get<float> (e), j, i );
                     return failure_prob <= delta;
                 } );
                 Tu_local.insert(Tu_local.end(), it, couples.end());
@@ -406,11 +399,7 @@ namespace panna{
                 // Add the weight of the confirmed edges, keep track of the max confirmed and count the unconfirmed ones
                 for (const auto& edge : top_copy) {
                     auto edge_weight = std::get<0>(edge);  
-                    auto probability = failure_probability( table.get_hasher(),
-                        std::get<0>(edge),
-                        i,
-                        j+1,
-                        MAX_REPETITIONS);
+                    auto probability = table.fail_probability( edge_weight, i, j+1 );
                     if (probability < delta) {
                         weight += edge_weight;
                         if (edge_weight > max_confirmed) {

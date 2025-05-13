@@ -69,6 +69,10 @@ namespace panna {
             return dataset.size();
         }
 
+        size_t num_concatenations() const {
+            return hasher->get_concatenations();
+        }
+
         std::string describe_family() const {
             return builder.describe();
         }
@@ -247,19 +251,15 @@ namespace panna {
         }
 
         // Function to return all colliding couples in a given repetition and concatenation
-        template <typename Iter>
-        void search_pairs( Iter begin,
-            Iter end,
+        void search_pairs( 
             size_t repetition,
-            size_t concatenation_shave,
-            float delta,
+            size_t concatenations,
             std::vector<std::tuple<float, std::pair<uint32_t, uint32_t>>>& output ) {
             expect( hasher );
 
             size_t collisions = 0;
             // Setup
             output.clear();
-            size_t concatenations = hasher->get_concatenations() - concatenation_shave;
             std::vector<std::pair<uint32_t, uint32_t>> scratch (65536);
             
             // TO DO: Find a way to create the cursors once and for all, maybe you also have to store them
@@ -270,24 +270,44 @@ namespace panna {
                 cursor.shorten_prefix( concatenations );
             }
 
-            while ( keep_going ) {
+            while ( !keep_going ) {
                 size_t cursor_collisions;
                 std::tie( cursor_collisions, keep_going ) = cursor.next(scratch);
+                if (cursor_collisions != 0)
+                std::cout << cursor_collisions << std::endl;
                 collisions += cursor_collisions;
+                size_t current_size = output.size();
 
-                #pragma omp parallel for
+                // Fill the output vector and then parallel compute the distances              
+                for ( size_t num = 0; num < collisions; num++ ) {
+                    output.emplace_back( std::numeric_limits<double>::infinity(), scratch[num] ); // We put a mock value? 
+                }
+
+                //#pragma omp parallel for
                 for ( size_t num = 0; num < collisions; num++ ) {
                     uint32_t x_p, y_p;
-                    std::tie(x_p, y_p) = scratch[num];
+                    std::tie(x_p, y_p) = std::get<1>( output[current_size + num] );
                     PointHandle x = dataset[x_p];
                     PointHandle y = dataset[y_p];
                     float dist = Distance::compute( y, x );
-                    output.emplace_back( dist,
-                                         std::make_pair( x_p, y_p) );
+                    // If the pairs are already in the list we just have to access them so no race conditions
+                    std::get<float>( output[current_size + num] ) = dist;
                 }
             }
 
             std::sort( output.begin(), output.end() );
         } // End search couples
+
+        float fail_probability ( float dist, size_t rep, size_t concat ) {
+            return failure_probability(
+                *hasher, dist, concat, rep + 1, lsh_maps.size() );
+        }
+
+        float get_distance (size_t a, size_t b ) {
+            PointHandle x = dataset[a];
+            PointHandle y = dataset[b];
+            return Distance::compute( x, y );
+        }
+
     };
 } // namespace panna
