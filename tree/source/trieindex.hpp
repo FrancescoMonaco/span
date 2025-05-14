@@ -256,35 +256,28 @@ namespace panna {
             size_t concatenations,
             std::vector<std::tuple<float, std::pair<uint32_t, uint32_t>>>& output ) {
             expect( hasher );
-
             size_t collisions = 0;
             // Setup
-            output.clear();
             std::vector<std::pair<uint32_t, uint32_t>> scratch (65536);
-            
             // TO DO: Find a way to create the cursors once and for all, maybe you also have to store them
             PairPrefixMapCursor<typename Hasher::Value> cursor = lsh_maps[repetition].create_pair_cursor();
             bool keep_going = true;
-        
             if ( concatenations != hasher->get_concatenations() ) {
                 cursor.shorten_prefix( concatenations );
             }
-
-            while ( !keep_going ) {
-                size_t cursor_collisions;
+            while ( keep_going ) {
+                size_t cursor_collisions = 0;
                 std::tie( cursor_collisions, keep_going ) = cursor.next(scratch);
-                if (cursor_collisions != 0)
-                std::cout << cursor_collisions << std::endl;
                 collisions += cursor_collisions;
                 size_t current_size = output.size();
-
+                
                 // Fill the output vector and then parallel compute the distances              
-                for ( size_t num = 0; num < collisions; num++ ) {
-                    output.emplace_back( std::numeric_limits<double>::infinity(), scratch[num] ); // We put a mock value? 
+                for ( size_t num = 0; num < cursor_collisions; num++ ) {
+                    output.emplace_back( std::numeric_limits<float>::infinity(), scratch[num] ); // We put a mock value? 
                 }
 
-                //#pragma omp parallel for
-                for ( size_t num = 0; num < collisions; num++ ) {
+#pragma omp parallel for
+                for ( size_t num = 0; num < cursor_collisions; num++ ) {
                     uint32_t x_p, y_p;
                     std::tie(x_p, y_p) = std::get<1>( output[current_size + num] );
                     PointHandle x = dataset[x_p];
@@ -296,6 +289,8 @@ namespace panna {
             }
 
             std::sort( output.begin(), output.end() );
+            std::cout << std::get<float>(*output.begin()) << " " << std::get<float>(*(output.end()-1)) << " ";
+            std::cout << std::get<1>(*output.begin()).first <<" "<< std::get<1>(*output.begin()).second << " " << std::get<1>(*(output.end() - 1)).first << " " << std::get<1>(*(output.end() - 1)).second << std::endl;
         } // End search couples
 
         float fail_probability ( float dist, size_t rep, size_t concat ) {

@@ -94,14 +94,14 @@ namespace panna{
              * @param epsilon Approximation factor parameter (default: 0.01)
              *
              * @details This constructor initializes an EMST object by:
-             * 1. Setting up the LSH index table with cosine similarity metric
-             * 2. Inserting all input vectors into the index
+             * 1. Set up the LSH index table with the distance metric
+             * 2. Insert all input vectors into the index
              * 3. Rebuilding the index structure
              * 4. Construct a Union Find data structure
              * The constructor takes ownership of the input data through a move operation.
              */
-            EMST(size_t dimensions, size_t repetitions, typename Hasher::Builder builder, std::vector<std::vector<float>> &data_in, size_t data_dimensionality, const float delta = 0.01, const float epsilon = 0.01)
-                : dimensionality(data_dimensionality),
+            EMST(size_t dimensions, size_t repetitions, typename Hasher::Builder builder, std::vector<std::vector<float>> &data_in, const float delta = 0.01, const float epsilon = 0.01)
+                : dimensionality(dimensions),
                   memory_limit(memory_limit),
                   table(Index<Dataset, Hasher, Distance>(dimensions, builder, repetitions)),
                   data(data_in),
@@ -116,6 +116,7 @@ namespace panna{
                     table.insert( point.begin(), point.end() );
                 }
                 table.rebuild();
+
 
                 // Get info on the index
                 MAX_HASHBITS = table.num_concatenations();
@@ -137,7 +138,7 @@ namespace panna{
                 clear();
                 //Compute all the distances
                 std::vector<EdgeTuple> all_edges;
-                std::vector<std::vector<EdgeTuple>> local_edges (num_data);
+                local_edges.resize(num_data);
                 #pragma omp parallel for
                 for (uint32_t i = 0; i < num_data; i++) {
                     for (uint32_t j = i+1; j < num_data; j++) {
@@ -168,16 +169,17 @@ namespace panna{
 
             /// @brief Find the Minimum Spanning Tree using only confirmed edges
             std::vector<std::pair<unsigned int, unsigned int>> find_tree() {    
+                clear();
                 std::vector<std::pair<unsigned int, unsigned int>> tree;
 
                 bool found = false;
                 std::vector<EdgeTuple> edges;
-                for (int i=MAX_HASHBITS; i> 0; i--) {
+                for (size_t i = MAX_HASHBITS; i > 0; i--) {
                     if (found) {
                         break;
                     }
                     //#pragma omp parallel for
-                    for (size_t j=0; j<MAX_REPETITIONS; j++) {
+                    for (size_t j = 0; j < MAX_REPETITIONS; j++) {
                         if (found) {
                             continue;
                         }
@@ -202,7 +204,7 @@ namespace panna{
                         //#pragma omp critical
                         {
                         // Every x iterations we have a batch, construct the MST from these edges
-                        if ((j+1)%((int)MAX_REPETITIONS/4) == 0 && !found) { 
+                        if (!found) {
                             //Move the top edges in with the new edges
                             edges.insert(edges.end(), 
                                          std::make_move_iterator(top.begin()),
@@ -214,6 +216,7 @@ namespace panna{
                                 edges.insert(edges.end(), std::make_move_iterator(local.begin()), std::make_move_iterator(local.end()));
                                 local.clear();
                             }
+                            std::cout << edges.size() << std::endl;
                             if (!(edges.size() < num_data -1)) {
 
                                 std::sort(edges.begin(), edges.end());
@@ -229,7 +232,6 @@ namespace panna{
                                 for (const auto& edge : top) {
                                     tree_weight += std::get<0>(edge);
                                 }
-                                std::cout << "Weight: " << tree_weight << std::endl;
                                 if (top.size() == num_data - 1) {
                                     //Check that all edges are confirmed by the probability
                                     bool valid = true;
@@ -365,27 +367,23 @@ namespace panna{
 
             /// @brief Obtain the couples of nodes that share the same prefix from the hash table
             ///        and split them into edges whose recall is above the threshold and the others
-            /// @param st CollisionEnumerator object that stores the repetition and the prefix
+            /// @param i Current concatenation in the hash index
+            /// @param j current repetition in the hash index
             /// @param Tu_local vector that stores the unconfirmed edges
             /// @param Tc_local vector that stores the confirmed edges
             void enumerate_edges(size_t i, size_t j, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local) {
                 // Discover edges that share the same prefix at iteration i, j
                 std::vector<EdgeTuple> couples;
                 table.search_pairs(j, i, couples);
-                std::cout << "Size couples: " << couples.size() << std::endl;
-
                 // Find the edges that are confirmed and the ones that are not, the edges are ordered by weight so we can binary search the splitting point
                 // We compute the probability using collision_probability(distance) of each edge, and find all the edges that are above the threshold delta
                 auto it = std::partition_point( couples.begin(), couples.end(), [&] (const auto& e) { 
                     auto failure_prob = table.fail_probability( std::get<float> (e), j, i );
                     return failure_prob <= delta;
-                } );
+                    } );
                 Tu_local.insert(Tu_local.end(), it, couples.end());
-                couples.erase(it, couples.end());
-                Tc_local.insert(Tc_local.end(), couples.begin(), couples.end());
+                Tc_local.insert(Tc_local.end(), couples.begin(), it);
                 std::cout << "Size Tu: " << Tu_local.size() << " Size Tc: " << Tc_local.size() << std::endl;
-
-
                 return;
             };
 
@@ -459,7 +457,7 @@ namespace panna{
             /// @return true if an edge has been added to the edge_list and the DSU data structure, false otherwise
             bool add_edge(const EdgeTuple& new_edge_input, DSU &dsu, std::vector<EdgeTuple>& edge_list) {
                 // Extract new edge and its weight.
-                std::pair<unsigned int, unsigned int> new_edge = std::get<1>(new_edge_input);
+                std::pair<uint32_t, uint32_t> new_edge = std::get<1>(new_edge_input);
             
                 // Try to add new edge normally.
                 if (dsu.union_sets(new_edge.first, new_edge.second)) {
@@ -483,9 +481,11 @@ namespace panna{
             /// @brief Clear the data structures from previous runs
             void clear() {
                 top.clear();
-                for (auto& local : local_edges) {
+                probabilities.clear();
+                for (auto& local: local_edges) {
                     local.clear();
                 }
+                local_edges.resize(MAX_REPETITIONS);
             }
             
     };  //closes class

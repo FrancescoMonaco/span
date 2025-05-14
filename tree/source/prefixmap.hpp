@@ -249,17 +249,16 @@ namespace panna {
             // Setup
             size_t collisions = 0;
             size_t len_buff = scratch_space.size();
-            bool end = true;
-            std::cout << "In" <<std::endl;
+            bool continue_cycle = false;
 
-            if ( current_index != current_comparison ) { // We have an unfinished run
-                std::cout << "Unfinished run" << std::endl;
+            // We have an unfinished run
+            if ( current_index != current_comparison ) { 
                 for ( current_index; current_index < range_end - 1; current_index++ ) {
                     for ( current_comparison; current_comparison < range_end; current_comparison++ ) {                                               
                         // Full buffer
                         if ( collisions >= len_buff ) {
-                            end = false;
-                            return std::make_pair( collisions, end );
+                            continue_cycle = true;
+                            return std::make_pair( collisions, continue_cycle );
                         }
                         scratch_space[collisions] = std::make_pair( indices[current_index], indices[current_comparison] );
                         collisions++;
@@ -272,17 +271,15 @@ namespace panna {
             while ( range_end < hashes.size() ) { // do it until we scan all the vector
                 update_range_start();
                 update_range_end();
-                std::cout<<"Updated "<< range_start << " " << range_end <<std::endl;
                 for ( size_t current = range_start; current < range_end; current++ ) {
                     for ( size_t next = current + 1; next < range_end - 1; next++ ) {
                         
                         // Full buffer
                         if ( collisions >= len_buff ) {
-                            std::cout << collisions << " " << len_buff << std::endl;
                             current_index = current;
                             current_comparison = next;
-                            end = false;
-                            return std::make_pair( collisions, end );
+                            continue_cycle = true;
+                            return std::make_pair( collisions, continue_cycle );
                         }
                         scratch_space[collisions] = std::make_pair( indices[current], indices[next] );
                         collisions++;
@@ -291,7 +288,7 @@ namespace panna {
                 // Switch to the next hash
                 current_hash = hashes[range_end];
             }
-            return std::make_pair( collisions, end );
+            return std::make_pair( collisions, continue_cycle);
         }
     };
 
