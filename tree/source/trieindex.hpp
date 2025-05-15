@@ -289,8 +289,8 @@ namespace panna {
             }
 
             std::sort( output.begin(), output.end() );
-            std::cout << std::get<float>(*output.begin()) << " " << std::get<float>(*(output.end()-1)) << " ";
-            std::cout << std::get<1>(*output.begin()).first <<" "<< std::get<1>(*output.begin()).second << " " << std::get<1>(*(output.end() - 1)).first << " " << std::get<1>(*(output.end() - 1)).second << std::endl;
+            // std::cout << std::get<float>(*output.begin()) << " " << std::get<float>(*(output.end()-1)) << " ";
+            // std::cout << std::get<1>(*output.begin()).first <<" "<< std::get<1>(*output.begin()).second << " " << std::get<1>(*(output.end() - 1)).first << " " << std::get<1>(*(output.end() - 1)).second << std::endl;
         } // End search couples
 
         float fail_probability ( float dist, size_t rep, size_t concat ) {

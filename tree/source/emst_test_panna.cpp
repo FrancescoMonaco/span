@@ -2,15 +2,16 @@
 #include "panna/emst.hpp"
 #include "panna/lsh/euclidean.hpp"
 #include "panna/distance.hpp"
+#include "panna/rand.hpp"
 
 using namespace panna;
 
 int main()  {
 
-    const size_t conc = 24;
-    const size_t dimensions = 3;
-    const size_t rep = 10;
-    const size_t n = 1500;
+    const size_t conc = 16;
+    const size_t dimensions = 8;
+    const size_t rep = 50;
+    const size_t n = 15000;
     using Hasher = E2LSH<conc, NormedPoints>;
 
     E2LSHBuilder<conc, NormedPoints> builder ( dimensions );
@@ -22,14 +23,18 @@ int main()  {
         points.push_back( point );
     }
 
-    EMST<NormedPoints, Hasher, EuclideanDistance> tree( dimensions, rep, builder, points, dimensions );
+    EMST<NormedPoints, Hasher, EuclideanDistance> tree( dimensions, rep, builder, points );
 
     // Exact computation
-     float weight_exact = tree.exact_tree();
-     std::cout << "Exact weight is: " << weight_exact << std::endl;
+    //  float weight_exact = tree.exact_tree();
+    //  std::cout << "Exact weight is: " << weight_exact << std::endl;
 
     // Exact with predictions (?)
     (void) tree.find_tree();
+
+    std::cout << "----- Epsilon Version -----" << std::endl;
+    // Approximate with predictions
+    (void) tree.find_epsilon_tree();
 
 
     return 0;
