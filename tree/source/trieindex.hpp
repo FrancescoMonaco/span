@@ -237,7 +237,7 @@ namespace panna {
 
                     // check stopping condition
                     if ( output.size() == k ) {
-                        float topdist = output.back().first;
+                        float topdist = output.front().first; // ! We should check on the biggest element but the vector is a heap so it should be the first
                         float fp = failure_probability(
                             *hasher, topdist, concat, rep + 1, lsh_maps.size() );
                         if ( fp <= delta ) {
@@ -258,7 +258,7 @@ namespace panna {
             expect( hasher );
             size_t collisions = 0;
             // Setup
-            std::vector<std::pair<uint32_t, uint32_t>> scratch (65536);
+            std::vector<std::pair<const uint32_t*, const uint32_t*>> scratch (65536);
             // TO DO: Find a way to create the cursors once and for all, maybe you also have to store them
             PairPrefixMapCursor<typename Hasher::Value> cursor = lsh_maps[repetition].create_pair_cursor();
             bool keep_going = true;
@@ -273,7 +273,7 @@ namespace panna {
                 
                 // Fill the output vector and then parallel compute the distances              
                 for ( size_t num = 0; num < cursor_collisions; num++ ) {
-                    output.emplace_back( std::numeric_limits<float>::infinity(), scratch[num] ); // We put a mock value? 
+                    output.emplace_back( std::numeric_limits<float>::infinity(), std::make_pair(*scratch[num].first, *scratch[num].second) ); // We put a mock value? 
                 }
 
 #pragma omp parallel for
@@ -293,7 +293,7 @@ namespace panna {
             // std::cout << std::get<1>(*output.begin()).first <<" "<< std::get<1>(*output.begin()).second << " " << std::get<1>(*(output.end() - 1)).first << " " << std::get<1>(*(output.end() - 1)).second << std::endl;
         } // End search couples
 
-        float fail_probability ( float dist, size_t rep, size_t concat ) {
+        float fail_probability ( float dist, size_t concat, size_t rep ) {
             return failure_probability(
                 *hasher, dist, concat, rep + 1, lsh_maps.size() );
         }

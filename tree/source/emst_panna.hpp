@@ -66,7 +66,6 @@ namespace panna{
     class EMST {
         // Object variables
         uint32_t dimensionality;
-        uint64_t memory_limit;
         size_t MAX_REPETITIONS;
         uint32_t MAX_HASHBITS;
         Index<Dataset, Hasher, Distance> table;
@@ -79,7 +78,6 @@ namespace panna{
         std::vector<EdgeTuple> top;
         std::vector<std::vector<EdgeTuple>> local_confirmed;
         std::vector<std::vector<EdgeTuple>> local_edges;
-        std::vector<float> probabilities;
 
 
         public:
@@ -101,13 +99,12 @@ namespace panna{
              * 4. Construct a Union Find data structure
              * The constructor takes ownership of the input data through a move operation.
              */
-            EMST(size_t dimensions, size_t repetitions, typename Hasher::Builder builder, std::vector<std::vector<float>> &data_in, const float delta = 0.01, const float epsilon = 0.2)
+            EMST(const size_t dimensions, const size_t repetitions, const typename Hasher::Builder builder, std::vector<std::vector<float>> &data_in, const float delta = 0.1, const float epsilon = 0.2)
                 : dimensionality(dimensions),
-                  memory_limit(memory_limit),
                   table(Index<Dataset, Hasher, Distance>(dimensions, builder, repetitions)),
                   data(data_in),
                   num_data((data_in).size()),
-                  delta(delta),
+                  delta(delta/num_data),
                   epsilon(epsilon),
                   dsu_true(DSU(num_data))   {
                 
@@ -125,7 +122,6 @@ namespace panna{
 
                 local_edges.resize(MAX_REPETITIONS);
                 local_confirmed.resize(MAX_REPETITIONS);
-                probabilities.resize(MAX_REPETITIONS, 1);
                 //dirty_start(local_Tus[0]);
                 std::cout << "Index constructed, L: " << MAX_REPETITIONS <<  " K: " << MAX_HASHBITS << " num data: " << num_data << std::endl;
             };
@@ -179,7 +175,7 @@ namespace panna{
                 for (size_t i = MAX_HASHBITS; i > 0; i--) {
                     if (found)
                         break;
-                    //#pragma omp parallel for
+#pragma omp parallel for
                     for (size_t j = 0; j < MAX_REPETITIONS; j++) {
                         if (found) {
                             continue;
@@ -195,10 +191,10 @@ namespace panna{
                                                     std::make_move_iterator( local_Tu.end() ) );
                         std::sort( local_confirmed[j].begin(), local_confirmed[j].end() );
                         std::sort( local_edges[j].begin(), local_edges[j].end() );
-                        //#pragma omp critical
+#pragma omp critical
                         {
                         // Every x iterations we have a batch, construct the MST from these edges
-                        if (!found && ((j+1) == MAX_REPETITIONS || (j+1) == (size_t)MAX_REPETITIONS/2)) {
+                        if ( ((j+1) == MAX_REPETITIONS || (j+1) == (size_t)MAX_REPETITIONS/2)) {
                             // edges.insert( edges.end(),
                             //     std::make_move_iterator(top.begin()),
                             //     std::make_move_iterator(top.end()) );
@@ -211,14 +207,15 @@ namespace panna{
                             }
                             for ( auto& local : local_edges ) {
                                 auto it = std::partition_point( local.begin(), local.end(), [&] (const auto& e) { 
-                                    return table.fail_probability( std::get<float> (e), j, i ) < delta;                               
+                                    return table.fail_probability( std::get<float> (e), i, j ) < delta;                               
                                     } );
                                 edges.insert ( edges.end(), local.begin(), it );
                                 // std::make_move_iterator(local.begin()), std::make_move_iterator(it) );
                                 //local.erase(local.begin(), it);   
                             } 
                             if (edges.size() > num_data -1) {
-                                std::sort(edges.begin(), edges.end());
+                                std::sort( edges.begin(), edges.end() );
+                                edges.erase( std::unique( edges.begin(), edges.end() ), edges.end() );
                                 for (const auto& edge : edges) {
                                     add_edge(edge, dsu_true, top);
                                     if (top.size() == num_data - 1) {
@@ -298,7 +295,7 @@ namespace panna{
                             }
                             for ( auto& local : local_edges ) {
                                 auto it = std::partition_point( local.begin(), local.end(), [&] (const auto& e) { 
-                                    return table.fail_probability( std::get<float> (e), j, i ) < delta;                               
+                                    return table.fail_probability( std::get<float> (e), i, j ) < delta;                               
                                     } );
                                 edges.insert ( edges.end(), local.begin(), it );
                                 unconfirmed_ordered_edges.insert ( unconfirmed_ordered_edges.end(), it, local.end() );
@@ -368,25 +365,25 @@ namespace panna{
                 // Find the edges that are confirmed and the ones that are not, the edges are ordered in ascending order so we can binary search the splitting point
                 // We compute the probability using collision_probability(distance) of each edge, and find all the edges that are above the threshold delta
                 auto it = std::partition_point( couples.begin(), couples.end(), [&] (const auto& e) { 
-                    return table.fail_probability( std::get<float> (e), j, i ) < delta;                
+                    return table.fail_probability( std::get<float> (e), i, j ) < delta;                
                     } );
                 Tu_local.insert(Tu_local.end(), it, couples.end());
                 Tc_local.insert(Tc_local.end(), couples.begin(), it);
-                //std::cout << "Size Tu: " << Tu_local.size() << " Size Tc: " << Tc_local.size() << std::endl;
+                // std::cout << "Size Tu: " << Tu_local.size() << " Size Tc: " << Tc_local.size() << std::endl;
                 return;
             };
 
             /// @brief Return the bound weight (1+ɛ)(sum over Tc + |Tu|*max(Tu) )
             /// @param top_copy a vector that contains the edges in the spanning tree
             /// @return the weight
-            float bound_weight(const std::vector<EdgeTuple>& top_copy, int i, int j) {
+            float bound_weight(const std::vector<EdgeTuple>& top_copy, size_t i, size_t j) {
                 float weight = 0;
                 float max_confirmed = 0;
                 int unconfirmed = 0;
                 // Add the weight of the confirmed edges, keep track of the max confirmed and count the unconfirmed ones
                 for (const auto& edge : top_copy) {
                     auto edge_weight = std::get<float>(edge);  
-                    auto probability = table.fail_probability( edge_weight, j, i );
+                    auto probability = table.fail_probability( edge_weight, i, j );
                     if (probability < delta) {
                         weight += edge_weight;
                         if (edge_weight > max_confirmed) {
@@ -436,7 +433,6 @@ namespace panna{
                     return false;
                 }
                 std::cout << "Connected" << std::endl;
-
                 return true;
             };
             
@@ -445,7 +441,7 @@ namespace panna{
             /// @param dsu the data structure that keeps track of the connected components
             /// @param edge_list the current edges in the tree
             /// @return true if an edge has been added to the edge_list and the DSU data structure, false otherwise
-            bool add_edge(const EdgeTuple& new_edge_input, DSU &dsu, std::vector<EdgeTuple>& edge_list) {
+            bool add_edge(const EdgeTuple& new_edge_input, DSU& dsu, std::vector<EdgeTuple>& edge_list) {
                 // Extract new edge and its weight.
                 std::pair<uint32_t, uint32_t> new_edge = std::get<1>(new_edge_input);
             
@@ -460,18 +456,17 @@ namespace panna{
             /// @brief Generate a random spanning tree to have an initial solution
             void dirty_start(std::vector<EdgeTuple>& clean) {
                 std::vector<unsigned int> vertices(num_data);
-                std::iota(vertices.begin(), vertices.end(), 0);
-                std::random_shuffle(vertices.begin(), vertices.end());
+                std::iota( vertices.begin(), vertices.end(), 0 );
+                std::random_shuffle( vertices.begin(), vertices.end() );
                 for (size_t i = 1; i < vertices.size(); i++) {
-                    clean.emplace_back(Distance::compute(vertices[i-1], vertices[i]) , std::make_pair(vertices[i-1], vertices[i]));
+                    clean.emplace_back( Distance::compute(vertices[i-1], vertices[i]), std::make_pair(vertices[i-1], vertices[i]) );
                 }
-                std::sort(clean.begin(), clean.end());
+                std::sort( clean.begin(), clean.end() );
             }
 
             /// @brief Clear the data structures from previous runs
             void clear() {
                 top.clear();
-                probabilities.clear();
                 for (auto& local: local_edges) {
                     local.clear();
                 }
@@ -481,6 +476,5 @@ namespace panna{
                 local_confirmed.resize(MAX_REPETITIONS);
                 local_edges.resize(MAX_REPETITIONS);
             }
-            
     };  //closes class
 }       //closes namespace

@@ -245,7 +245,7 @@ namespace panna {
                 } ) );
         }
 
-        std::pair<size_t, bool> next( std::vector<std::pair<uint32_t, uint32_t>>& scratch_space ) {
+        std::pair<size_t, bool> next( std::vector<std::pair<Iter, Iter>>& scratch_space ) {
             // Setup
             size_t collisions = 0;
             size_t len_buff = scratch_space.size();
@@ -253,14 +253,14 @@ namespace panna {
 
             // We have an unfinished run
             if ( current_index != current_comparison ) { 
-                for ( current_index; current_index < range_end - 1; current_index++ ) {
+                for ( current_index; current_index < range_end; current_index++ ) {
                     for ( current_comparison; current_comparison < range_end; current_comparison++ ) {                                               
                         // Full buffer
                         if ( collisions >= len_buff ) {
                             continue_cycle = true;
                             return std::make_pair( collisions, continue_cycle );
                         }
-                        scratch_space[collisions] = std::make_pair( indices[current_index], indices[current_comparison] );
+                        scratch_space[collisions] = std::make_pair( &indices[current_index], &indices[current_comparison] );
                         collisions++;
                     }
                 }
@@ -272,7 +272,7 @@ namespace panna {
                 update_range_start();
                 update_range_end();
                 for ( size_t current = range_start; current < range_end; current++ ) {
-                    for ( size_t next = current + 1; next < range_end - 1; next++ ) {
+                    for ( size_t next = current + 1; next < range_end; next++ ) {
                         
                         // Full buffer
                         if ( collisions >= len_buff ) {
@@ -281,7 +281,7 @@ namespace panna {
                             continue_cycle = true;
                             return std::make_pair( collisions, continue_cycle );
                         }
-                        scratch_space[collisions] = std::make_pair( indices[current], indices[next] );
+                        scratch_space[collisions] = std::make_pair( &indices[current], &indices[next] );
                         collisions++;
                     }
                 }
