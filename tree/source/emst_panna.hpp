@@ -11,6 +11,22 @@ using EdgeTuple = std::tuple<float, std::pair<uint32_t, uint32_t>>;
 
 namespace panna{
 
+    // @brief Computes the binomial coefficient, 
+    //        adapted from https://stackoverflow.com/questions/55421835/c-binomial-coefficient-is-too-slow
+    // @param n number of elements
+    // @param k number of elements to choose
+    // @return the binomial coefficient C(n, k)
+    double BinomialCoefficient(const double n, const double k) {
+        double aSolutions, oldSolutions;
+        oldSolutions = n - k + 1;
+
+        for (double i = 1; i < k; ++i) {
+            aSolutions = oldSolutions * (n - k + 1 + i) / (i + 1);
+            oldSolutions = aSolutions;
+        }
+        return aSolutions;
+    }
+
     struct Prefix{
         uint32_t i;
         uint32_t j;
@@ -58,6 +74,15 @@ namespace panna{
                 parent[rootY] = rootX;
                 rank[rootX]++;
             }
+            // Union by size
+            // if (rank[rootX] < rank[rootY]) {
+            //     uint32_t temp = rootX;
+            //     rootX = rootY;
+            //     rootY = temp;
+            // }
+
+            // parent[rootY] = rootX;
+            // rank[rootX] += rank[rootY];
             return true;
         }
     };
@@ -71,13 +96,15 @@ namespace panna{
         Index<Dataset, Hasher, Distance> table;
         std::vector<std::vector<float>> data {};
         uint32_t num_data {0};
-        float delta {0.01};
+        double delta {0.01};
         const float epsilon {0.01};
         DSU dsu_true;
         // Sets for the confimed and the unconfirmed edges
         std::vector<EdgeTuple> top;
         std::vector<std::vector<EdgeTuple>> local_confirmed;
         std::vector<std::vector<EdgeTuple>> local_edges;
+        std::vector<EdgeTuple> confirmed;
+        std::vector<EdgeTuple> unconfirmed;
 
 
         public:
@@ -99,14 +126,13 @@ namespace panna{
              * 4. Construct a Union Find data structure
              * The constructor takes ownership of the input data through a move operation.
              */
-            EMST(const size_t dimensions, const size_t repetitions, const typename Hasher::Builder builder, std::vector<std::vector<float>> &data_in, const float delta = 0.1, const float epsilon = 0.2)
+            EMST(const size_t dimensions, const size_t repetitions, const typename Hasher::Builder builder, std::vector<std::vector<float>>& data_in, const double delta_in = 0.1, const float epsilon = 0.2)
                 : dimensionality(dimensions),
-                  table(Index<Dataset, Hasher, Distance>(dimensions, builder, repetitions)),
-                  data(data_in),
-                  num_data((data_in).size()),
-                  delta(delta/num_data),
+                  table( Index<Dataset, Hasher, Distance>(dimensions, builder, repetitions) ),
+                  data( data_in ),
+                  num_data( (data).size() ),
                   epsilon(epsilon),
-                  dsu_true(DSU(num_data))   {
+                  dsu_true( DSU(num_data) )   {
                 
                 // Insert the data
                 for ( auto& point: data_in ) {
@@ -119,11 +145,13 @@ namespace panna{
                 // Get info on the index
                 MAX_HASHBITS = table.num_concatenations();
                 MAX_REPETITIONS = table.num_repetitions();
+                delta = delta_in/BinomialCoefficient(num_data, 2);
 
                 local_edges.resize(MAX_REPETITIONS);
                 local_confirmed.resize(MAX_REPETITIONS);
                 //dirty_start(local_Tus[0]);
                 std::cout << "Index constructed, L: " << MAX_REPETITIONS <<  " K: " << MAX_HASHBITS << " num data: " << num_data << std::endl;
+                std::cout << "Delta: " << delta << std::endl;
             };
 
             /// @brief Destructor
@@ -172,52 +200,75 @@ namespace panna{
 
                 bool found = false;
                 std::vector<EdgeTuple> edges;
-                for (size_t i = MAX_HASHBITS; i > 0; i--) {
+                for (size_t i = MAX_HASHBITS; i >= 0; i--) {
                     if (found)
                         break;
 #pragma omp parallel for
                     for (size_t j = 0; j < MAX_REPETITIONS; j++) {
-                        if (found) {
+                        if (found) 
                             continue;
-                        }
                         DSU local_dsu(num_data);
                         std::vector<EdgeTuple> local_Tc, local_top, local_Tu;
                         enumerate_edges(i, j, local_Tu, local_Tc);   
+                        // local_confirmed[j].insert( local_confirmed[j].end(),
+                        //                             std::make_move_iterator( local_Tc.begin() ),
+                        //                             std::make_move_iterator( local_Tc.end() ) );
+                        // local_edges[j].insert( local_edges[j].end(),
+                        //                             std::make_move_iterator( local_Tu.begin() ),
+                        //                             std::make_move_iterator( local_Tu.end() ) );
+                        
+                        for ( auto& edge: local_Tc ) {
+                            if (local_top.size() == num_data - 1) {
+                                break;
+                            }
+                            add_edge(edge, local_dsu, local_top);
+                        }
+
+                        for ( auto& edge: local_Tu ) {
+                            if (local_top.size() == num_data - 1) {
+                                break;
+                            }
+                            add_edge(edge, local_dsu, local_top);
+                        }
+
                         local_confirmed[j].insert( local_confirmed[j].end(),
-                                                    std::make_move_iterator( local_Tc.begin() ),
-                                                    std::make_move_iterator( local_Tc.end() ) );
-                        local_edges[j].insert( local_edges[j].end(),
-                                                    std::make_move_iterator( local_Tu.begin() ),
-                                                    std::make_move_iterator( local_Tu.end() ) );
-                        std::sort( local_confirmed[j].begin(), local_confirmed[j].end() );
-                        std::sort( local_edges[j].begin(), local_edges[j].end() );
+                                                    std::make_move_iterator( local_top.begin() ),
+                                                    std::make_move_iterator( local_top.end() ) );
 #pragma omp critical
                         {
                         // Every x iterations we have a batch, construct the MST from these edges
-                        if ( ((j+1) == MAX_REPETITIONS || (j+1) == (size_t)MAX_REPETITIONS/2)) {
-                            // edges.insert( edges.end(),
-                            //     std::make_move_iterator(top.begin()),
-                            //     std::make_move_iterator(top.end()) );
+                        if ( ((j+1) == MAX_REPETITIONS || (j+1) == (size_t)MAX_REPETITIONS/2) ) {
+                            edges.insert( edges.end(),
+                                std::make_move_iterator(top.begin()),
+                                std::make_move_iterator(top.end()) );
                             top.clear();
                             dsu_true = DSU(num_data);
                             for (auto& local : local_confirmed) {
-                                edges.insert( edges.end(), local.begin(), local.end() );
+                                    edges.insert( edges.end(), local.begin(), local.end() );
                                 // std::make_move_iterator(local.begin()), std::make_move_iterator(local.end()) );
-                                //local.clear();
+                                local.clear();
                             }
-                            for ( auto& local : local_edges ) {
-                                auto it = std::partition_point( local.begin(), local.end(), [&] (const auto& e) { 
-                                    return table.fail_probability( std::get<float> (e), i, j ) < delta;                               
-                                    } );
-                                edges.insert ( edges.end(), local.begin(), it );
-                                // std::make_move_iterator(local.begin()), std::make_move_iterator(it) );
-                                //local.erase(local.begin(), it);   
-                            } 
+                            // for ( auto& local : local_edges ) {
+                            //     auto it = std::partition_point( local.begin(), local.end(), [&] (const auto& e) { 
+                            //         return table.fail_probability( std::get<float> (e), i, j ) < delta;                               
+                            //         } );
+                            //     edges.insert ( edges.end(), local.begin(), it );
+                            //     // std::make_move_iterator(local.begin()), std::make_move_iterator(it) );
+                            //     local.erase(local.begin(), it);   
+                            // } 
+                            // std::sort( unconfirmed.begin(), unconfirmed.end() );
+                            // unconfirmed.erase( std::unique( unconfirmed.begin(), unconfirmed.end() ), unconfirmed.end() );
+
+                            // // Find the slitting point
+                            // auto it = std::partition_point( unconfirmed.begin(), unconfirmed.end(), [&] (const auto& e) { 
+                            //     return table.fail_probability( std::get<float> (e), i, j ) < delta;                               
+                            //     } );
+                            // confirmed.insert ( confirmed.end(), unconfirmed.begin(), it );
+                            std::sort ( edges.begin(), edges.end() );
+                            edges.erase( std::unique( edges.begin(), edges.end() ), edges.end() );
                             if (edges.size() > num_data -1) {
-                                std::sort( edges.begin(), edges.end() );
-                                edges.erase( std::unique( edges.begin(), edges.end() ), edges.end() );
                                 for (const auto& edge : edges) {
-                                    add_edge(edge, dsu_true, top);
+                                    add_edge( edge, dsu_true, top );
                                     if (top.size() == num_data - 1) {
                                         break;
                                     }
@@ -234,13 +285,16 @@ namespace panna{
                                             tree_weight += std::get<0>(edge);
                                         }                           
                                     std::cout << "Tree weight: " << tree_weight << std::endl;
-                                    found = true;
+                                    std::cout << "Probability: " << table.fail_probability(std::get<float>(top.back()), i, j) << std::endl;
+                                    if (table.fail_probability( std::get<float>(top.back()), i, j) < delta ) {
+                                        found = true;
+                                    }
                                         // Fill the tree
                                     for (const auto& edge : top) {
-                                            tree.push_back(std::get<1>(edge));
+                                            tree.push_back( std::get<1>(edge) );
                                     }
                                 }
-                                // Lose the unused edges
+                                // Lose the unused edges, MST is composable wrt to edge partitioning
                                 edges.clear();
                             }
                         }
@@ -297,14 +351,14 @@ namespace panna{
                                 auto it = std::partition_point( local.begin(), local.end(), [&] (const auto& e) { 
                                     return table.fail_probability( std::get<float> (e), i, j ) < delta;                               
                                     } );
-                                edges.insert ( edges.end(), local.begin(), it );
-                                unconfirmed_ordered_edges.insert ( unconfirmed_ordered_edges.end(), it, local.end() );
+                                edges.insert( edges.end(), local.begin(), it );
+                                unconfirmed_ordered_edges.insert( unconfirmed_ordered_edges.end(), it, local.end() );
                                 // std::make_move_iterator(local.begin()), std::make_move_iterator(it) );
                                 //local.erase(local.begin(), it);   
                             } 
-                            std::sort(edges.begin(), edges.end());
+                            std::sort( edges.begin(), edges.end() );
                             for (const auto& edge : edges) {
-                                add_edge(edge, dsu_true, top);
+                                add_edge( edge, dsu_true, top );
                                 if (top.size() == num_data - 1) {
                                     break;
                                 }
