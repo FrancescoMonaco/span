@@ -1,7 +1,9 @@
 #pragma once
 #include "panna/trieindex.hpp"
 #include "panna/linalg.hpp"
+#include "panna/dsu.hpp"
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <algorithm>
 #include <unistd.h>
@@ -26,67 +28,7 @@ namespace panna{
         }
         return aSolutions;
     }
-
-    struct Prefix{
-        uint32_t i;
-        uint32_t j;
-        float delta;
-    };
-
-    /// @brief Disjoint Set Union data structure, implemented with path compression and union by rank.
-    struct DSU {
-        std::vector<uint32_t> parent, rank;
-    
-        /// @brief Create a Union Find data structure
-        /// @param n number of elements
-        DSU(uint32_t n) : parent(n), rank(n, 0) {
-            for (uint32_t i = 0; i < n; i++) {
-                parent[i] = i;
-            }
-        }
-    
-        /// @brief Return the parent of the set containing x
-        /// @param x, the element to find
-        /// @return the parent of the set containing x
-        uint32_t find(uint32_t x) {
-            if (parent[x] != x)
-                parent[x] = find(parent[x]); // Path compression
-            return parent[x];
-        }
-    
-        /// @brief Merge the sets containing x and y in time O(ɑ(n))
-        /// @param x first element 
-        /// @param y second element
-        /// @return true if the sets containing x and y were disjoint and were successfully merged, false otherwise
-        bool union_sets(uint32_t x, uint32_t y) {
-            uint32_t rootX = find(x);
-            uint32_t rootY = find(y);
-    
-            if (rootX == rootY)
-                return false; // Cycle detected
-    
-            // Union by rank
-            if (rank[rootX] > rank[rootY]) {
-                parent[rootY] = rootX;
-            } else if (rank[rootX] < rank[rootY]) {
-                parent[rootX] = rootY;
-            } else {
-                parent[rootY] = rootX;
-                rank[rootX]++;
-            }
-            // Union by size
-            // if (rank[rootX] < rank[rootY]) {
-            //     uint32_t temp = rootX;
-            //     rootX = rootY;
-            //     rootY = temp;
-            // }
-
-            // parent[rootY] = rootX;
-            // rank[rootX] += rank[rootY];
-            return true;
-        }
-    };
-        
+  
     template <typename Dataset, typename Hasher, typename Distance>
     class EMST {
         // Object variables
@@ -99,6 +41,7 @@ namespace panna{
         double delta {0.01};
         const float epsilon {0.01};
         DSU dsu_true;
+        DSU filter;
         // Sets for the confimed and the unconfirmed edges
         std::vector<EdgeTuple> top;
         std::vector<std::vector<EdgeTuple>> local_confirmed;
@@ -132,7 +75,8 @@ namespace panna{
                   data( data_in ),
                   num_data( (data).size() ),
                   epsilon(epsilon),
-                  dsu_true( DSU(num_data) )   {
+                  dsu_true( DSU(num_data) ),
+                  filter( DSU(num_data) ) {
                 
                 // Insert the data
                 for ( auto& point: data_in ) {
@@ -145,7 +89,7 @@ namespace panna{
                 // Get info on the index
                 MAX_HASHBITS = table.num_concatenations();
                 MAX_REPETITIONS = table.num_repetitions();
-                delta = delta_in/BinomialCoefficient(num_data, 2);
+                delta = delta_in/num_data;//BinomialCoefficient(num_data, 2);
 
                 local_edges.resize(MAX_REPETITIONS);
                 local_confirmed.resize(MAX_REPETITIONS);
@@ -184,18 +128,20 @@ namespace panna{
                 DSU dsu(num_data);
                 float tree_weight = 0;
                 std::cout << "Creating the MST" << std::endl;
+                std::vector<EdgeTuple> tree;
                 for (const auto& edge : all_edges) {
-                    add_edge(edge, dsu, top);
+                    add_edge(edge, dsu, tree);
                 }
-                for (const auto& edge : top) {
+                for (const auto& edge : tree) {
                     tree_weight += std::get<0>(edge);
                 }
                 return tree_weight;
             }
 
             /// @brief Find the Minimum Spanning Tree using only confirmed edges
-            std::vector<std::pair<unsigned int, unsigned int>> find_tree() {    
+            float find_tree() {    
                 clear();
+                float tree_weight = 0;
                 std::vector<std::pair<unsigned int, unsigned int>> tree;
 
                 bool found = false;
@@ -217,12 +163,12 @@ namespace panna{
                         //                             std::make_move_iterator( local_Tu.begin() ),
                         //                             std::make_move_iterator( local_Tu.end() ) );
                         
-                        for ( auto& edge: local_Tc ) {
-                            if (local_top.size() == num_data - 1) {
-                                break;
-                            }
-                            add_edge(edge, local_dsu, local_top);
-                        }
+                        // for ( auto& edge: local_Tc ) {
+                        //     if (local_top.size() == num_data - 1) {
+                        //         break;
+                        //     }
+                        //     add_edge(edge, local_dsu, local_top);
+                        // }
 
                         for ( auto& edge: local_Tu ) {
                             if (local_top.size() == num_data - 1) {
@@ -275,12 +221,20 @@ namespace panna{
                                 }
                                 std::cout << "Tree size: " << top.size() << std::endl;
                                 // Print also the current weight
-                                float tree_weight = 0;
+                                tree_weight = 0;
                                 for (const auto& edge : top) {
                                     tree_weight += std::get<0>(edge);
                                 }
+                                // Find the confirmed points and update the filter DSU with them
+                                filter = DSU(num_data);
+                                auto it = std::partition_point( top.begin(), top.end(), [&] (const auto& e) { 
+                                    return table.fail_probability( std::get<float> (e), i, j ) < delta;                               
+                                    } );
+                                for (auto edge = top.begin(); edge != it; ++edge) {
+                                    filter.union_sets( std::get<1>(*edge).first, std::get<1>(*edge).second );
+                                }
                                 if (top.size() == num_data - 1) {
-                                    float tree_weight = 0;
+                                    tree_weight = 0;
                                     for (const auto& edge : top) {
                                             tree_weight += std::get<0>(edge);
                                         }                           
@@ -288,14 +242,15 @@ namespace panna{
                                     std::cout << "Probability: " << table.fail_probability(std::get<float>(top.back()), i, j) << std::endl;
                                     if (table.fail_probability( std::get<float>(top.back()), i, j) < delta ) {
                                         found = true;
-                                    }
+                                    
                                         // Fill the tree
                                     for (const auto& edge : top) {
                                             tree.push_back( std::get<1>(edge) );
                                     }
+                                    }
                                 }
                                 // Lose the unused edges, MST is composable wrt to edge partitioning
-                                edges.clear();
+                                 edges.clear();
                             }
                         }
                         }
@@ -303,7 +258,13 @@ namespace panna{
                     std::cout << "Finished prefix " << i << std::endl;
                 }
                 is_connected(tree);
-                return tree;
+                // // Save to file the edges
+                // std::ofstream outfile("edges_ny_eucl.txt");
+                // for (const auto& edge : tree) {
+                //     outfile << (edge).first << " " << (edge).second << std::endl;
+                // }
+                // outfile.close();
+                return tree_weight;
             }
 
             /// @brief Find the ɛ-EMST using both confirmed and unconfirmed edges
@@ -415,14 +376,15 @@ namespace panna{
             void enumerate_edges(size_t i, size_t j, std::vector<EdgeTuple>& Tu_local, std::vector<EdgeTuple>& Tc_local) {
                 // Discover edges that share the same prefix at iteration i, j
                 std::vector<EdgeTuple> couples;
-                table.search_pairs(j, i, couples);
+                table.search_pairs_filter(j, i, couples, filter);
                 // Find the edges that are confirmed and the ones that are not, the edges are ordered in ascending order so we can binary search the splitting point
                 // We compute the probability using collision_probability(distance) of each edge, and find all the edges that are above the threshold delta
-                auto it = std::partition_point( couples.begin(), couples.end(), [&] (const auto& e) { 
-                    return table.fail_probability( std::get<float> (e), i, j ) < delta;                
-                    } );
-                Tu_local.insert(Tu_local.end(), it, couples.end());
-                Tc_local.insert(Tc_local.end(), couples.begin(), it);
+                // auto it = std::partition_point( couples.begin(), couples.end(), [&] (const auto& e) { 
+                //     return table.fail_probability( std::get<float> (e), i, j ) < delta;                
+                //     } );
+                // Tu_local.insert(Tu_local.end(), it, couples.end());
+                // Tc_local.insert(Tc_local.end(), couples.begin(), it);
+                Tu_local.insert(Tu_local.end(), couples.begin(), couples.end());
                 // std::cout << "Size Tu: " << Tu_local.size() << " Size Tc: " << Tc_local.size() << std::endl;
                 return;
             };
